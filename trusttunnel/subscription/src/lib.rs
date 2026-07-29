@@ -1,7 +1,9 @@
 //! Client-side support for TrustTunnel endpoint subscriptions.
 
+mod fetch;
 mod response;
 
+pub use fetch::{HttpError, HttpRequest, HttpTransport, UreqTransport};
 pub use response::SubscriptionResponse;
 
 #[derive(Debug)]
