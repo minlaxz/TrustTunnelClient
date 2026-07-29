@@ -4,10 +4,9 @@ use std::fs;
 use std::io::IsTerminal;
 use std::ops::Not;
 use std::sync::{Mutex, MutexGuard};
+use trusttunnel_settings::composer;
 
-mod composer;
 mod settings;
-mod template_settings;
 mod user_interaction;
 mod version;
 

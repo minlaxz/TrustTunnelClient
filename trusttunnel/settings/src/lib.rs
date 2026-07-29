@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize};
 use trusttunnel_deeplink::DeepLinkConfig;
 
+pub mod composer;
+pub mod settings;
+pub mod template_settings;
+
+pub use settings::{Listener, Settings, SocksListener, TunListener};
+
 /// Endpoint connection settings. Shared by `setup_wizard` and `deeplink-ffi`.
 #[derive(Default, Deserialize, Serialize)]
 pub struct Endpoint {

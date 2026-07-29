@@ -143,7 +143,7 @@ fn fill_tun_listener_table(table: &mut Table, settings: &Settings) {
 mod tests {
     use super::*;
     use crate::settings::{Listener, TunListener};
-    use trusttunnel_settings::Endpoint;
+    use crate::Endpoint;
 
     fn test_settings(dns_upstreams: Vec<String>) -> Settings {
         Settings {
