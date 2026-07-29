@@ -45,7 +45,7 @@ macro_rules! docgen {
 }
 
 docgen! {
-    #[derive(Deserialize, Serialize)]
+    #[derive(Default, Deserialize, Serialize)]
     pub struct Settings {
         #{doc("Logging level [info, debug, trace]")}
         #[serde(default = "Settings::default_loglevel")]

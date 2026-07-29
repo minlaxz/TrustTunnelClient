@@ -61,6 +61,17 @@ fn fill_endpoint_table(mut doc: Document, settings: &Settings) -> Document {
     endpoint["upstream_protocol"] = value(&settings.endpoint.upstream_protocol);
     endpoint["custom_sni"] = value(&settings.endpoint.custom_sni);
     endpoint["dns_upstreams"] = value(Array::from_iter(settings.endpoint.dns_upstreams.iter()));
+    endpoint["name"] = value(settings.endpoint.name.as_deref().unwrap_or_default());
+    if let Some(subscription) = &settings.endpoint.subscription {
+        let mut table = Table::new();
+        table["url"] = value(&subscription.url);
+        if let Some(fetched_at) = &subscription.last_fetched_at {
+            table["last_fetched_at"] = value(fetched_at);
+        }
+        endpoint["subscription"] = Item::Table(table);
+    } else {
+        endpoint.remove("subscription");
+    }
 
     doc
 }
@@ -143,7 +154,7 @@ fn fill_tun_listener_table(table: &mut Table, settings: &Settings) {
 mod tests {
     use super::*;
     use crate::settings::{Listener, TunListener};
-    use crate::Endpoint;
+    use crate::{Endpoint, EndpointSubscription};
 
     fn test_settings(dns_upstreams: Vec<String>) -> Settings {
         Settings {
@@ -212,5 +223,46 @@ mod tests {
 
         let parsed: toml::Value = output.parse().unwrap();
         assert!(parsed.get("dns_upstreams").is_none());
+    }
+
+    #[test]
+    fn compose_writes_subscription_table() {
+        let mut settings = Settings::default();
+        settings.endpoint.subscription = Some(EndpointSubscription {
+            url: "https://u:p@vpn.example.com/subscription".to_string(),
+            last_fetched_at: Some("2026-07-28T12:00:00Z".to_string()),
+        });
+        let doc = compose_document(None, &settings);
+        let text = doc.to_string();
+        assert!(text.contains("[endpoint.subscription]"));
+        assert!(text.contains("url = \"https://u:p@vpn.example.com/subscription\""));
+        assert!(text.contains("last_fetched_at = \"2026-07-28T12:00:00Z\""));
+    }
+
+    #[test]
+    fn compose_omits_subscription_table_when_absent() {
+        let settings = Settings::default();
+        let doc = compose_document(None, &settings);
+        let endpoint = doc
+            .get("endpoint")
+            .and_then(Item::as_table)
+            .expect("endpoint table missing");
+        assert!(endpoint.get("subscription").is_none());
+    }
+
+    #[test]
+    fn compose_writes_name_as_real_key() {
+        let mut settings = Settings::default();
+        settings.endpoint.name = Some("Example VPN".to_string());
+        let doc = compose_document(None, &settings);
+        let text = doc.to_string();
+        let endpoint_table = text
+            .split("[endpoint]")
+            .nth(1)
+            .expect("endpoint table missing");
+        assert!(endpoint_table.contains("name = \"Example VPN\""));
+
+        let doc = compose_document(None, &Settings::default());
+        assert_eq!(doc["endpoint"]["name"].as_str(), Some(""));
     }
 }

@@ -8,7 +8,7 @@ pub mod template_settings;
 pub use settings::{Listener, Settings, SocksListener, TunListener};
 
 /// Endpoint connection settings. Shared by `setup_wizard` and `deeplink-ffi`.
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct Endpoint {
     pub hostname: String,
     pub addresses: Vec<String>,
@@ -32,6 +32,21 @@ pub struct Endpoint {
     pub dns_upstreams: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subscription: Option<EndpointSubscription>,
+}
+
+/// Subscription settings for keeping the endpoint parameters up to date.
+/// Refresh with `trusttunnel_client --refresh`.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct EndpointSubscription {
+    /// HTTPS URL of the subscription document, optionally with embedded
+    /// HTTP Basic Auth credentials.
+    pub url: String,
+    /// Time of the last successful fetch, RFC 3339 UTC. Absent when the
+    /// subscription has never been fetched successfully.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_fetched_at: Option<String>,
 }
 
 impl Endpoint {
@@ -140,6 +155,10 @@ pub fn endpoint_from_deeplink_config(config: DeepLinkConfig) -> Result<Endpoint,
         custom_sni: config.custom_sni.unwrap_or_default(),
         dns_upstreams: config.dns_upstreams,
         name: config.name,
+        subscription: config.subscription_url.map(|url| EndpointSubscription {
+            url,
+            last_fetched_at: None,
+        }),
     })
 }
 
@@ -147,6 +166,11 @@ pub fn endpoint_from_deeplink_config(config: DeepLinkConfig) -> Result<Endpoint,
 mod tests {
     use super::*;
     use trusttunnel_deeplink::Protocol;
+
+    #[derive(serde::Deserialize, serde::Serialize)]
+    struct EndpointWrapper {
+        endpoint: Endpoint,
+    }
 
     #[test]
     fn test_deeplink_field_mapping() {
@@ -291,5 +315,76 @@ mod tests {
         let ep: Endpoint = toml::from_str(toml_str).unwrap();
         assert_eq!(ep.dns_upstreams, vec!["tls://dns.adguard-dns.com"]);
         assert_eq!(ep.name, Some("Example VPN".to_string()));
+    }
+
+    #[test]
+    fn test_subscription_roundtrip() {
+        let toml_str = r#"
+[endpoint]
+hostname = "vpn.example.com"
+addresses = ["1.2.3.4:443"]
+username = "alice"
+password = "s3cr3t"
+
+[endpoint.subscription]
+url = "https://u:p@vpn.example.com/subscription"
+last_fetched_at = "2026-07-28T12:00:00Z"
+"#;
+        let endpoint: Endpoint = toml::from_str::<EndpointWrapper>(toml_str)
+            .map(|w| w.endpoint)
+            .unwrap();
+        let subscription = endpoint.subscription.as_ref().unwrap();
+        assert_eq!(subscription.url, "https://u:p@vpn.example.com/subscription");
+        assert_eq!(
+            subscription.last_fetched_at.as_deref(),
+            Some("2026-07-28T12:00:00Z")
+        );
+
+        let serialized = toml::to_string(&EndpointWrapper { endpoint }).unwrap();
+        assert!(serialized.contains("[endpoint.subscription]"));
+        assert!(serialized.contains("last_fetched_at"));
+    }
+
+    #[test]
+    fn test_subscription_absent_by_default() {
+        let toml_str = r#"
+[endpoint]
+hostname = "vpn.example.com"
+addresses = ["1.2.3.4:443"]
+username = "alice"
+password = "s3cr3t"
+"#;
+        let endpoint: Endpoint = toml::from_str::<EndpointWrapper>(toml_str)
+            .map(|w| w.endpoint)
+            .unwrap();
+        assert!(endpoint.subscription.is_none());
+        let serialized = toml::to_string(&EndpointWrapper { endpoint }).unwrap();
+        assert!(!serialized.contains("subscription"));
+    }
+
+    #[test]
+    fn test_deeplink_maps_subscription_url() {
+        let config = DeepLinkConfig {
+            hostname: None,
+            addresses: vec![],
+            username: None,
+            password: None,
+            client_random_prefix: None,
+            custom_sni: None,
+            has_ipv6: true,
+            skip_verification: false,
+            certificate: None,
+            upstream_protocol: Protocol::Http2,
+            anti_dpi: false,
+            name: None,
+            dns_upstreams: vec![],
+            subscription_url: Some("https://u:p@vpn.example.com/subscription".to_string()),
+        };
+        let ep = endpoint_from_deeplink_config(config).unwrap();
+        assert_eq!(
+            ep.subscription.as_ref().map(|s| s.url.as_str()),
+            Some("https://u:p@vpn.example.com/subscription")
+        );
+        assert!(ep.subscription.as_ref().unwrap().last_fetched_at.is_none());
     }
 }
