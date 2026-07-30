@@ -265,7 +265,8 @@ Note: Cannot mix these variants"#,
                 let settings = settings::build(Some(&settings));
                 println!("The settings are successfully built");
 
-                let doc = composer::compose_document(Some(&path), &settings);
+                let doc = composer::compose_document(Some(&path), &settings)
+                    .unwrap_or_else(|e| panic!("Couldn't compose the settings document: {e}"));
                 fs::write(&path, doc.to_string()).expect("Couldn't write the settings to a file");
 
                 path
@@ -283,7 +284,8 @@ Note: Cannot mix these variants"#,
                         .or(Some("trusttunnel_client.toml".into())),
                 );
                 if checked_overwrite(&path, "Overwrite the existing settings file?") {
-                    let doc = composer::compose_document(None, &settings);
+                    let doc = composer::compose_document(None, &settings)
+                        .unwrap_or_else(|e| panic!("Couldn't compose the settings document: {e}"));
                     fs::write(&path, doc.to_string())
                         .expect("Couldn't write the settings to a file");
                 } else {

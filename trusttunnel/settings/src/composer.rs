@@ -1,28 +1,66 @@
-use crate::settings::{Listener, Settings};
+use crate::settings::{Listener, Settings, SocksListener, TunListener};
 use crate::template_settings;
 use crate::template_settings::ToTomlComment;
+use std::fmt;
 use std::fs;
 use toml_edit::{value, Array, Document, Item, Table};
 
-pub fn compose_document(file: Option<&str>, settings: &Settings) -> Document {
+/// Failure to compose a settings document.
+#[derive(Debug)]
+pub enum ComposeError {
+    Read { path: String, error: std::io::Error },
+    Parse(toml_edit::TomlError),
+    MissingTable(&'static str),
+}
+
+impl fmt::Display for ComposeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ComposeError::Read { path, error } => write!(f, "Couldn't read file '{path}': {error}"),
+            ComposeError::Parse(error) => write!(f, "Couldn't parse the document: {error}"),
+            ComposeError::MissingTable(name) => write!(f, "Missing [{name}] table in the document"),
+        }
+    }
+}
+
+impl std::error::Error for ComposeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ComposeError::Read { error, .. } => Some(error),
+            ComposeError::Parse(error) => Some(error),
+            ComposeError::MissingTable(_) => None,
+        }
+    }
+}
+
+pub fn compose_document(file: Option<&str>, settings: &Settings) -> Result<Document, ComposeError> {
     let doc = match file {
-        Some(x) => read_existing_file(x),
-        None => fabricate_template_document(),
+        Some(x) => read_existing_file(x)?,
+        None => fabricate_template_document()?,
     };
 
+    apply_to_document(doc, settings)
+}
+
+/// Apply `settings` onto an already-parsed document, preserving everything
+/// the model does not represent.
+pub fn apply_to_document(doc: Document, settings: &Settings) -> Result<Document, ComposeError> {
     let doc = fill_main_table(doc, settings);
-    let doc = fill_endpoint_table(doc, settings);
+    let doc = fill_endpoint_table(doc, settings)?;
     fill_listener_table(doc, settings)
 }
 
-fn read_existing_file(file: &str) -> Document {
+fn read_existing_file(file: &str) -> Result<Document, ComposeError> {
     fs::read_to_string(file)
-        .unwrap_or_else(|_| panic!("Couldn't read file: {file}"))
+        .map_err(|error| ComposeError::Read {
+            path: file.to_string(),
+            error,
+        })?
         .parse()
-        .expect("Couldn't parse file content")
+        .map_err(ComposeError::Parse)
 }
 
-fn fabricate_template_document() -> Document {
+fn fabricate_template_document() -> Result<Document, ComposeError> {
     format!(
         "{}\n{}\n{}",
         template_settings::MAIN_TABLE.as_str(),
@@ -30,7 +68,7 @@ fn fabricate_template_document() -> Document {
         template_settings::COMMON_LISTENER_TABLE,
     )
     .parse()
-    .expect("Couldn't parse fabricated document")
+    .map_err(ComposeError::Parse)
 }
 
 fn fill_main_table(mut doc: Document, settings: &Settings) -> Document {
@@ -43,11 +81,11 @@ fn fill_main_table(mut doc: Document, settings: &Settings) -> Document {
     doc
 }
 
-fn fill_endpoint_table(mut doc: Document, settings: &Settings) -> Document {
+fn fill_endpoint_table(mut doc: Document, settings: &Settings) -> Result<Document, ComposeError> {
     let endpoint = doc
         .get_mut("endpoint")
         .and_then(Item::as_table_mut)
-        .expect("Endpoint table not found");
+        .ok_or(ComposeError::MissingTable("endpoint"))?;
 
     endpoint["hostname"] = value(&settings.endpoint.hostname);
     endpoint["addresses"] = value(Array::from_iter(settings.endpoint.addresses.iter()));
@@ -73,14 +111,14 @@ fn fill_endpoint_table(mut doc: Document, settings: &Settings) -> Document {
         endpoint.remove("subscription");
     }
 
-    doc
+    Ok(doc)
 }
 
-fn fill_listener_table(mut doc: Document, settings: &Settings) -> Document {
+fn fill_listener_table(mut doc: Document, settings: &Settings) -> Result<Document, ComposeError> {
     let mut listener = doc
         .get_mut("listener")
         .and_then(Item::as_table_mut)
-        .expect("Listener table not found");
+        .ok_or(ComposeError::MissingTable("listener"))?;
 
     let kind = settings.listener.to_kind_string();
     if !listener.contains_table(&kind) {
@@ -90,56 +128,52 @@ fn fill_listener_table(mut doc: Document, settings: &Settings) -> Document {
             "{}\n{}\n{}\n{}",
             doc,
             template_settings::COMMON_LISTENER_TABLE,
-            match kind.as_str() {
-                "socks" => template_settings::SOCKS_LISTENER.as_str(),
-                "tun" => template_settings::TUN_LISTENER.as_str(),
-                _ => unreachable!(),
+            match &settings.listener {
+                Listener::Socks(_) => template_settings::SOCKS_LISTENER.as_str(),
+                Listener::Tun(_) => template_settings::TUN_LISTENER.as_str(),
             },
-            match kind.as_str() {
-                "socks" => template_settings::TUN_LISTENER.to_toml_comment(),
-                "tun" => template_settings::SOCKS_LISTENER.to_toml_comment(),
-                _ => unreachable!(),
+            match &settings.listener {
+                Listener::Socks(_) => template_settings::TUN_LISTENER.to_toml_comment(),
+                Listener::Tun(_) => template_settings::SOCKS_LISTENER.to_toml_comment(),
             },
         )
         .parse()
-        .expect("Couldn't parse rebuilt document");
+        .map_err(ComposeError::Parse)?;
         listener = doc
             .get_mut("listener")
             .and_then(Item::as_table_mut)
-            .unwrap();
+            .ok_or(ComposeError::MissingTable("listener"))?;
     }
 
-    match kind.as_str() {
-        "socks" => fill_socks_listener_table(listener, settings),
-        "tun" => fill_tun_listener_table(listener, settings),
-        _ => unreachable!(),
+    match &settings.listener {
+        Listener::Socks(socks) => fill_socks_listener_table(listener, socks)?,
+        Listener::Tun(tun) => fill_tun_listener_table(listener, tun)?,
     }
 
-    doc
+    Ok(doc)
 }
 
-fn fill_socks_listener_table(table: &mut Table, settings: &Settings) {
-    let table = table["socks"]
+fn fill_socks_listener_table(
+    listener: &mut Table,
+    settings: &SocksListener,
+) -> Result<(), ComposeError> {
+    let table = listener["socks"]
         .as_table_mut()
-        .expect("SOCKS listener table not found");
-    let settings = match &settings.listener {
-        Listener::Socks(x) => x,
-        _ => unreachable!(),
-    };
+        .ok_or(ComposeError::MissingTable("listener.socks"))?;
 
     table["address"] = value(&settings.address);
     table["username"] = value(settings.username.as_deref().unwrap_or_default());
     table["password"] = value(settings.password.as_deref().unwrap_or_default());
+    Ok(())
 }
 
-fn fill_tun_listener_table(table: &mut Table, settings: &Settings) {
-    let table = table["tun"]
+fn fill_tun_listener_table(
+    listener: &mut Table,
+    settings: &TunListener,
+) -> Result<(), ComposeError> {
+    let table = listener["tun"]
         .as_table_mut()
-        .expect("TUN listener table not found");
-    let settings = match &settings.listener {
-        Listener::Tun(x) => x,
-        _ => unreachable!(),
-    };
+        .ok_or(ComposeError::MissingTable("listener.tun"))?;
 
     table["bound_if"] = value(&settings.bound_if);
     table["included_routes"] = value(Array::from_iter(settings.included_routes.iter()));
@@ -148,6 +182,7 @@ fn fill_tun_listener_table(table: &mut Table, settings: &Settings) {
     table["change_system_dns"] = value(settings.change_system_dns);
     table["device_name"] = value(&settings.device_name);
     table["use_existing"] = value(settings.use_existing);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -195,7 +230,7 @@ mod tests {
     #[test]
     fn compose_writes_endpoint_dns_upstreams() {
         let settings = test_settings(vec!["tls://dns.adguard-dns.com".into()]);
-        let doc = compose_document(None, &settings);
+        let doc = compose_document(None, &settings).unwrap();
         let output = doc.to_string();
 
         let parsed: toml::Value = output.parse().unwrap();
@@ -207,7 +242,7 @@ mod tests {
     #[test]
     fn compose_writes_empty_dns_upstreams() {
         let settings = test_settings(vec![]);
-        let doc = compose_document(None, &settings);
+        let doc = compose_document(None, &settings).unwrap();
         let output = doc.to_string();
 
         let parsed: toml::Value = output.parse().unwrap();
@@ -218,7 +253,7 @@ mod tests {
     #[test]
     fn compose_omits_root_legacy_dns_upstreams() {
         let settings = test_settings(vec!["tls://dns.adguard-dns.com".into()]);
-        let doc = compose_document(None, &settings);
+        let doc = compose_document(None, &settings).unwrap();
         let output = doc.to_string();
 
         let parsed: toml::Value = output.parse().unwrap();
@@ -232,7 +267,7 @@ mod tests {
             url: "https://u:p@vpn.example.com/subscription".to_string(),
             last_fetched_at: Some("2026-07-28T12:00:00Z".to_string()),
         });
-        let doc = compose_document(None, &settings);
+        let doc = compose_document(None, &settings).unwrap();
         let text = doc.to_string();
         assert!(text.contains("[endpoint.subscription]"));
         assert!(text.contains("url = \"https://u:p@vpn.example.com/subscription\""));
@@ -242,7 +277,7 @@ mod tests {
     #[test]
     fn compose_omits_subscription_table_when_absent() {
         let settings = Settings::default();
-        let doc = compose_document(None, &settings);
+        let doc = compose_document(None, &settings).unwrap();
         let endpoint = doc
             .get("endpoint")
             .and_then(Item::as_table)
@@ -254,7 +289,7 @@ mod tests {
     fn compose_writes_name_as_real_key() {
         let mut settings = Settings::default();
         settings.endpoint.name = Some("Example VPN".to_string());
-        let doc = compose_document(None, &settings);
+        let doc = compose_document(None, &settings).unwrap();
         let text = doc.to_string();
         let endpoint_table = text
             .split("[endpoint]")
@@ -262,7 +297,20 @@ mod tests {
             .expect("endpoint table missing");
         assert!(endpoint_table.contains("name = \"Example VPN\""));
 
-        let doc = compose_document(None, &Settings::default());
+        let doc = compose_document(None, &Settings::default()).unwrap();
         assert_eq!(doc["endpoint"]["name"].as_str(), Some(""));
+    }
+
+    #[test]
+    fn missing_endpoint_table_is_an_error() {
+        let err = apply_to_document(Document::new(), &Settings::default()).unwrap_err();
+        assert!(matches!(err, ComposeError::MissingTable("endpoint")));
+    }
+
+    #[test]
+    fn missing_listener_table_is_an_error() {
+        let doc: Document = "[endpoint]\n".parse().unwrap();
+        let err = apply_to_document(doc, &Settings::default()).unwrap_err();
+        assert!(matches!(err, ComposeError::MissingTable("listener")));
     }
 }
