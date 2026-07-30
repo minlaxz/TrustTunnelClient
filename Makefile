@@ -23,7 +23,7 @@ endif
 BUILD_DIR ?= cmake-build-$(PRESET)
 COMPILE_COMMANDS = $(BUILD_DIR)/compile_commands.json
 EXPORT_DIR ?= bin
-SETUP_WIZARD_DIR = trusttunnel/setup_wizard
+TRUSTTUNNEL_RUST_DIR = trusttunnel
 
 ifeq ($(OS), Windows_NT)
 EXE_SUFFIX = .exe
@@ -220,8 +220,8 @@ lint-md:
 ##    rustup component add rustfmt
 .PHONY: lint-rust
 lint-rust:
-	cargo clippy --manifest-path $(SETUP_WIZARD_DIR)/Cargo.toml -- -D warnings
-	cargo fmt --all --manifest-path $(SETUP_WIZARD_DIR)/Cargo.toml -- --check
+	cargo clippy --workspace --manifest-path $(TRUSTTUNNEL_RUST_DIR)/Cargo.toml -- -D warnings
+	cargo fmt --all --manifest-path $(TRUSTTUNNEL_RUST_DIR)/Cargo.toml -- --check
 
 ## Fix linter issues that are auto-fixable.
 .PHONY: lint-fix
@@ -237,8 +237,8 @@ lint-fix-cpp: check-clang-format-version
 ## Auto-fix Rust code formatting issues with rustfmt.
 .PHONY: lint-fix-rust
 lint-fix-rust:
-	cargo clippy --fix --allow-dirty --manifest-path $(SETUP_WIZARD_DIR)/Cargo.toml
-	cargo fmt --all --manifest-path $(SETUP_WIZARD_DIR)/Cargo.toml
+	cargo clippy --fix --allow-dirty --workspace --manifest-path $(TRUSTTUNNEL_RUST_DIR)/Cargo.toml
+	cargo fmt --all --manifest-path $(TRUSTTUNNEL_RUST_DIR)/Cargo.toml
 
 ## Auto-fix markdown files.
 .PHONY: lint-fix-md
@@ -290,6 +290,6 @@ test-live: build_live_tests
 		--output-on-failure -L live -E test_vpn_client_live
 
 .PHONY: test-rust
-## Run the Rust unit tests of the setup wizard workspace.
+## Run the Rust unit tests of the trusttunnel workspace.
 test-rust:
-	cargo test --workspace --manifest-path $(SETUP_WIZARD_DIR)/Cargo.toml
+	cargo test --workspace --manifest-path $(TRUSTTUNNEL_RUST_DIR)/Cargo.toml

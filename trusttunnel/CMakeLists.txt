@@ -243,6 +243,8 @@ endif ()
 message("Rust target triple: ${RUST_TARGET_TRIPLE}")
 
 set(DEEPLINK_FFI_LIBFILE "${RUST_WORKSPACE_TARGET_DIR}/${TARGET_SUBDIR}/${DEEPLINK_FFI_LIBNAME}")
+set(SUBSCRIPTION_FFI_STATICLIB_NAME ${CMAKE_STATIC_LIBRARY_PREFIX}trusttunnel_subscription_ffi${CMAKE_STATIC_LIBRARY_SUFFIX})
+set(SUBSCRIPTION_FFI_LIBFILE "${RUST_WORKSPACE_TARGET_DIR}/${TARGET_SUBDIR}/${SUBSCRIPTION_FFI_STATICLIB_NAME}")
 
 if (ANDROID)
     ExternalProject_Add(trusttunnel_rust
@@ -255,10 +257,10 @@ if (ANDROID)
             BUILD_COMMAND ${CMAKE_COMMAND} -E env CARGO_BUILD_TARGET_DIR=${RUST_WORKSPACE_TARGET_DIR} TT_CLIENT_VERSION=${TT_CLIENT_VERSION_FULL} ${ANDROID_HOME_VAR}
             cargo ${CARGO_TARGET}
             ${CARGO_BUILD_TYPE}
-            --package trusttunnel-deeplink-ffi
+            --workspace
             TEST_COMMAND ""
             INSTALL_COMMAND ""
-            BUILD_BYPRODUCTS ${DEEPLINK_FFI_LIBFILE}
+            BUILD_BYPRODUCTS ${DEEPLINK_FFI_LIBFILE} ${SUBSCRIPTION_FFI_LIBFILE}
             )
     set(DEEPLINK_FFI_BUILD_TARGET trusttunnel_rust)
 else ()
@@ -274,7 +276,7 @@ else ()
             --workspace
             TEST_COMMAND ""
             INSTALL_COMMAND ${CMAKE_COMMAND} -E copy ${RUST_WORKSPACE_TARGET_DIR}/${TARGET_SUBDIR}/${WIZARD_EXE_NAME} ${CMAKE_CURRENT_BINARY_DIR}
-            BUILD_BYPRODUCTS ${DEEPLINK_FFI_LIBFILE}
+            BUILD_BYPRODUCTS ${DEEPLINK_FFI_LIBFILE} ${SUBSCRIPTION_FFI_LIBFILE}
             )
     set(DEEPLINK_FFI_BUILD_TARGET setup_wizard)
 
@@ -295,6 +297,14 @@ set_target_properties(trusttunnel_deeplink_ffi PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/deeplink-ffi/include"
 )
 add_dependencies(trusttunnel_deeplink_ffi ${DEEPLINK_FFI_BUILD_TARGET})
+
+add_library(trusttunnel_subscription_ffi STATIC IMPORTED GLOBAL)
+set_target_properties(trusttunnel_subscription_ffi PROPERTIES
+    IMPORTED_LOCATION "${SUBSCRIPTION_FFI_LIBFILE}"
+    INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/subscription-ffi/include"
+)
+add_dependencies(trusttunnel_subscription_ffi ${DEEPLINK_FFI_BUILD_TARGET})
+target_link_libraries(vpnlibs_trusttunnel trusttunnel_subscription_ffi)
 
 enable_testing()
 if (NOT ANDROID)
