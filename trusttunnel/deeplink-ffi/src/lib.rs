@@ -33,8 +33,12 @@ impl DeepLinkError {
 
 /// Free an error returned by any `trusttunnel_deeplink_*` function.
 /// Passing NULL is safe.
+///
+/// # Safety
+/// `error` must be null or a pointer previously returned by a
+/// `trusttunnel_deeplink_*` function, passed at most once.
 #[no_mangle]
-pub extern "C" fn trusttunnel_deeplink_error_free(error: *mut DeepLinkError) {
+pub unsafe extern "C" fn trusttunnel_deeplink_error_free(error: *mut DeepLinkError) {
     if !error.is_null() {
         unsafe {
             let e = Box::from_raw(error);
@@ -57,8 +61,12 @@ pub extern "C" fn trusttunnel_deeplink_error_message(error: &DeepLinkError) -> *
 /// On failure, returns NULL and writes a heap-allocated `DeepLinkError`
 /// into `*error` (if `error` is non-NULL). Free it with
 /// `trusttunnel_deeplink_error_free`.
+///
+/// # Safety
+/// `uri` must be null or a valid NUL-terminated UTF-8 string. `error` must be
+/// null or point to writable memory for one `DeepLinkError` pointer.
 #[no_mangle]
-pub extern "C" fn trusttunnel_deeplink_decode(
+pub unsafe extern "C" fn trusttunnel_deeplink_decode(
     uri: *const c_char,
     error: *mut *mut DeepLinkError,
 ) -> *mut c_char {
@@ -100,8 +108,12 @@ pub extern "C" fn trusttunnel_deeplink_decode(
 
 /// Free a string returned by `trusttunnel_deeplink_decode`.
 /// Passing NULL is safe.
+///
+/// # Safety
+/// `ptr` must be null or a pointer previously returned by
+/// `trusttunnel_deeplink_decode`, passed at most once.
 #[no_mangle]
-pub extern "C" fn trusttunnel_deeplink_string_free(ptr: *mut c_char) {
+pub unsafe extern "C" fn trusttunnel_deeplink_string_free(ptr: *mut c_char) {
     if !ptr.is_null() {
         unsafe { drop(CString::from_raw(ptr)) };
     }
@@ -133,15 +145,15 @@ mod tests {
     #[test]
     fn test_ffi_null_input() {
         let mut error: *mut DeepLinkError = std::ptr::null_mut();
-        let ptr = trusttunnel_deeplink_decode(std::ptr::null(), &mut error);
+        let ptr = unsafe { trusttunnel_deeplink_decode(std::ptr::null(), &mut error) };
         assert!(ptr.is_null(), "Should return NULL for null input");
         assert!(!error.is_null(), "Should set error for null input");
-        trusttunnel_deeplink_error_free(error);
+        unsafe { trusttunnel_deeplink_error_free(error) };
     }
 
     #[test]
     fn test_ffi_null_error_param() {
-        let ptr = trusttunnel_deeplink_decode(std::ptr::null(), std::ptr::null_mut());
+        let ptr = unsafe { trusttunnel_deeplink_decode(std::ptr::null(), std::ptr::null_mut()) };
         assert!(
             ptr.is_null(),
             "Should return NULL for null input even without error param"
@@ -150,8 +162,10 @@ mod tests {
 
     #[test]
     fn test_ffi_free_does_not_panic_on_null() {
-        trusttunnel_deeplink_string_free(std::ptr::null_mut());
-        trusttunnel_deeplink_error_free(std::ptr::null_mut());
+        unsafe {
+            trusttunnel_deeplink_string_free(std::ptr::null_mut());
+            trusttunnel_deeplink_error_free(std::ptr::null_mut());
+        }
     }
 
     #[test]
