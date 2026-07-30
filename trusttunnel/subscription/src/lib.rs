@@ -1,10 +1,17 @@
 //! Client-side support for TrustTunnel endpoint subscriptions.
 
+mod apply;
 mod fetch;
 mod response;
+mod write;
 
-pub use fetch::{HttpError, HttpRequest, HttpTransport, UreqTransport};
+pub use apply::apply_subscription;
+pub use fetch::{
+    fetch_for_config, fetch_subscription, fetch_subscription_json, HttpError, HttpRequest,
+    HttpTransport, UreqTransport,
+};
 pub use response::SubscriptionResponse;
+pub use write::replace_file_atomic;
 
 #[derive(Debug)]
 pub enum SubscriptionError {

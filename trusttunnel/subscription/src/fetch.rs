@@ -4,6 +4,8 @@ use std::time::Duration;
 
 use base64::Engine;
 
+use crate::{SubscriptionError, SubscriptionResponse};
+
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_REDIRECTS: u32 = 5;
@@ -12,6 +14,47 @@ pub struct HttpRequest<'a> {
     pub url: &'a str,
     pub pinned_certificate_pem: Option<&'a str>,
     pub skip_verification: bool,
+}
+
+impl<'a> HttpRequest<'a> {
+    /// Build a request for fetching `url` on behalf of `endpoint`. The
+    /// pinned certificate is only sent to the endpoint's own host.
+    pub fn for_endpoint(url: &'a str, endpoint: &'a trusttunnel_settings::Endpoint) -> Self {
+        HttpRequest {
+            url,
+            pinned_certificate_pem: pinned_certificate(
+                url,
+                Some(&endpoint.hostname),
+                endpoint.certificate.as_deref(),
+            ),
+            skip_verification: endpoint.skip_verification,
+        }
+    }
+}
+
+/// Gate the pin by host: when `certificate_host` is `Some`, the certificate
+/// applies only if the URL's host matches it; when `None`, it always applies.
+fn pinned_certificate<'a>(
+    url: &str,
+    certificate_host: Option<&str>,
+    certificate: Option<&'a str>,
+) -> Option<&'a str> {
+    let applies = match certificate_host {
+        Some(expected) => url::Url::parse(url)
+            .ok()
+            .and_then(|parsed| {
+                parsed
+                    .host_str()
+                    .map(|host| host.eq_ignore_ascii_case(expected))
+            })
+            .unwrap_or(false),
+        None => true,
+    };
+    if applies {
+        certificate
+    } else {
+        None
+    }
 }
 
 #[derive(Debug)]
@@ -50,6 +93,74 @@ impl std::error::Error for HttpError {}
 
 pub trait HttpTransport {
     fn get(&self, request: &HttpRequest) -> Result<Vec<u8>, HttpError>;
+}
+
+fn fetch_body(
+    request: &HttpRequest,
+    transport: &dyn HttpTransport,
+) -> Result<String, SubscriptionError> {
+    if request.skip_verification {
+        // Warn on every unverified fetch; never log the URL.
+        eprintln!("WARNING: fetching the subscription without verifying the server certificate");
+    }
+    let body = transport
+        .get(request)
+        .map_err(|e| SubscriptionError::Other(format!("Failed to fetch the subscription: {e}")))?;
+    String::from_utf8(body)
+        .map_err(|_| SubscriptionError::InvalidDocument("response is not valid UTF-8".into()))
+}
+
+/// Fetch and validate the subscription document for one request.
+pub fn fetch_subscription(
+    request: &HttpRequest,
+    transport: &dyn HttpTransport,
+) -> Result<SubscriptionResponse, SubscriptionError> {
+    SubscriptionResponse::from_json(&fetch_body(request, transport)?)
+}
+
+/// Fetch the subscription document at `url` and return the raw validated
+/// body. `certificate_host` gates the pin: when `Some`, the certificate is
+/// only used if the URL's host matches it; when `None`, it is always used.
+pub fn fetch_subscription_json(
+    url: &str,
+    certificate_host: Option<&str>,
+    certificate: Option<&str>,
+    skip_verification: bool,
+    transport: &dyn HttpTransport,
+) -> Result<String, SubscriptionError> {
+    let request = HttpRequest {
+        url,
+        pinned_certificate_pem: pinned_certificate(url, certificate_host, certificate),
+        skip_verification,
+    };
+    let body = fetch_body(&request, transport)?;
+    SubscriptionResponse::from_json(&body)?;
+    Ok(body)
+}
+
+/// Fetch the subscription document for the endpoint described by the config
+/// text and return the raw validated body. The subscription URL, the
+/// certificate pin and the verification policy are read from the endpoint
+/// section of the config.
+pub fn fetch_for_config(
+    config_text: &str,
+    transport: &dyn HttpTransport,
+) -> Result<String, SubscriptionError> {
+    let settings: trusttunnel_settings::Settings = toml::from_str(config_text)
+        .map_err(|e| SubscriptionError::Other(format!("Failed to parse config: {e}")))?;
+    let subscription = settings
+        .endpoint
+        .subscription
+        .as_ref()
+        .filter(|subscription| !subscription.url.is_empty())
+        .ok_or(SubscriptionError::NoSubscription)?;
+    fetch_subscription_json(
+        &subscription.url,
+        Some(&settings.endpoint.hostname),
+        settings.endpoint.certificate.as_deref(),
+        settings.endpoint.skip_verification,
+        transport,
+    )
 }
 
 struct PreparedRequest {
@@ -314,5 +425,187 @@ mod tests {
         let pem = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n";
         let certs = parse_pem_certificates(pem);
         assert_eq!(certs.len(), 1);
+    }
+
+    struct FakeTransport(Result<Vec<u8>, HttpError>);
+
+    impl HttpTransport for FakeTransport {
+        fn get(&self, _request: &HttpRequest) -> Result<Vec<u8>, HttpError> {
+            match &self.0 {
+                Ok(body) => Ok(body.clone()),
+                Err(_) => Err(HttpError::Transport("simulated outage".to_string())),
+            }
+        }
+    }
+
+    fn valid_body() -> Vec<u8> {
+        serde_json::json!({
+            "version": 1,
+            "hostname": "vpn.example.com",
+            "address": "5.6.7.8:443",
+            "username": "bob",
+            "password": "hunter2",
+            "has_ipv6": true,
+            "upstream_protocol": "http3",
+            "anti_dpi": false,
+            "skip_verification": false
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    #[test]
+    fn pin_applies_to_matching_host() {
+        let pin = pinned_certificate(
+            "https://vpn.example.com/s",
+            Some("vpn.example.com"),
+            Some("PEM"),
+        );
+        assert_eq!(pin, Some("PEM"));
+    }
+
+    #[test]
+    fn pin_dropped_for_other_host() {
+        let pin = pinned_certificate(
+            "https://other.example.net/s",
+            Some("vpn.example.com"),
+            Some("PEM"),
+        );
+        assert_eq!(pin, None);
+    }
+
+    #[test]
+    fn pin_always_applies_without_host_constraint() {
+        let pin = pinned_certificate("https://anything.example/s", None, Some("PEM"));
+        assert_eq!(pin, Some("PEM"));
+    }
+
+    #[test]
+    fn json_fetch_returns_raw_validated_body() {
+        let body = fetch_subscription_json(
+            "https://h/s",
+            None,
+            None,
+            false,
+            &FakeTransport(Ok(valid_body())),
+        )
+        .unwrap();
+        assert_eq!(body, String::from_utf8(valid_body()).unwrap());
+    }
+
+    #[test]
+    fn json_fetch_rejects_invalid_document() {
+        let err = fetch_subscription_json(
+            "https://h/s",
+            None,
+            None,
+            false,
+            &FakeTransport(Ok(b"{}".to_vec())),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("Invalid subscription document"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn json_fetch_reports_transport_failure() {
+        let err = fetch_subscription_json(
+            "https://h/s",
+            None,
+            None,
+            false,
+            &FakeTransport(Err(HttpError::Transport("down".to_string()))),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("Failed to fetch"),
+            "unexpected: {err}"
+        );
+    }
+
+    const FETCH_CONFIG: &str = r#"
+[endpoint]
+hostname = "vpn.example.com"
+addresses = ["1.1.1.1:443"]
+username = "alice"
+password = "old"
+certificate = "-----BEGIN CERTIFICATE-----\nPIN\n-----END CERTIFICATE-----\n"
+skip_verification = true
+
+[endpoint.subscription]
+url = "https://u:p@vpn.example.com/subscription"
+"#;
+
+    #[derive(Default)]
+    struct SeenRequest {
+        url: String,
+        pinned_certificate_pem: Option<String>,
+        skip_verification: bool,
+    }
+
+    struct RecordingTransport(std::cell::RefCell<Option<SeenRequest>>);
+
+    impl HttpTransport for RecordingTransport {
+        fn get(&self, request: &HttpRequest) -> Result<Vec<u8>, HttpError> {
+            *self.0.borrow_mut() = Some(SeenRequest {
+                url: request.url.to_string(),
+                pinned_certificate_pem: request.pinned_certificate_pem.map(str::to_string),
+                skip_verification: request.skip_verification,
+            });
+            Ok(valid_body())
+        }
+    }
+
+    #[test]
+    fn config_fetch_reads_url_pin_and_policy_from_the_endpoint() {
+        let transport = RecordingTransport(std::cell::RefCell::new(None));
+        let body = fetch_for_config(FETCH_CONFIG, &transport).unwrap();
+        assert_eq!(body, String::from_utf8(valid_body()).unwrap());
+        let seen = transport.0.borrow();
+        let seen = seen.as_ref().unwrap();
+        assert_eq!(seen.url, "https://u:p@vpn.example.com/subscription");
+        assert_eq!(
+            seen.pinned_certificate_pem.as_deref(),
+            Some("-----BEGIN CERTIFICATE-----\nPIN\n-----END CERTIFICATE-----\n")
+        );
+        assert!(seen.skip_verification);
+    }
+
+    #[test]
+    fn config_fetch_drops_the_pin_for_a_foreign_subscription_host() {
+        let config = FETCH_CONFIG.replace(
+            "https://u:p@vpn.example.com/subscription",
+            "https://other.example.net/subscription",
+        );
+        let transport = RecordingTransport(std::cell::RefCell::new(None));
+        fetch_for_config(&config, &transport).unwrap();
+        let seen = transport.0.borrow();
+        assert_eq!(seen.as_ref().unwrap().pinned_certificate_pem, None);
+    }
+
+    #[test]
+    fn config_fetch_without_subscription_is_a_distinct_error() {
+        let config = FETCH_CONFIG.replace("[endpoint.subscription]", "[endpoint.other]");
+        let err = fetch_for_config(&config, &FakeTransport(Ok(valid_body()))).unwrap_err();
+        assert_eq!(err.to_string(), "No subscription URL configured.");
+    }
+
+    #[test]
+    fn config_fetch_with_empty_url_is_a_distinct_error() {
+        let config = FETCH_CONFIG.replace("https://u:p@vpn.example.com/subscription", "");
+        let err = fetch_for_config(&config, &FakeTransport(Ok(valid_body()))).unwrap_err();
+        assert_eq!(err.to_string(), "No subscription URL configured.");
+    }
+
+    #[test]
+    fn config_fetch_with_invalid_config_is_a_parse_error() {
+        let err =
+            fetch_for_config("not [valid toml", &FakeTransport(Ok(valid_body()))).unwrap_err();
+        assert!(
+            err.to_string().contains("Failed to parse config"),
+            "unexpected: {err}"
+        );
     }
 }
