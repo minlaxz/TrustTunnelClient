@@ -29,6 +29,7 @@ set(SOURCE_FILES
         src/connection_info.cpp
         src/auto_network_monitor.cpp
         src/persistent_ring_buffer.cpp
+        src/subscription_refresh.cpp
         )
 
 add_library(vpnlibs_trusttunnel EXCLUDE_FROM_ALL ${SOURCE_FILES})

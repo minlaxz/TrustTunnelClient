@@ -22,6 +22,7 @@
 #include "vpn/trusttunnel/auto_network_monitor.h"
 #include "vpn/trusttunnel/client.h"
 #include "vpn/trusttunnel/config.h"
+#include "vpn/trusttunnel/subscription_refresh.h"
 #include "vpn/trusttunnel/version.h"
 
 #ifdef __APPLE__
@@ -121,6 +122,7 @@ int main(int argc, char **argv) {
             ("s", "Skip verify certificate", cxxopts::value<bool>()->default_value("false"))
             ("c,config", "Config file name.", cxxopts::value<std::string>()->default_value(std::string(DEFAULT_CONFIG_FILE)))
             ("l,loglevel", "Logging level. Possible values: error, warn, info, debug, trace.", cxxopts::value<std::string>()->default_value("info"))
+            ("refresh", "Refresh the endpoint parameters from the subscription URL and exit")
             ("h,help", "Print usage");
 #ifdef _WIN32
     args.add_options()
@@ -141,6 +143,10 @@ int main(int argc, char **argv) {
         // `{""}` mean print only options from default options group
         std::cout << args.help({""}) << '\n';
         return 1;
+    }
+
+    if (result.count("refresh")) {
+        return ag::run_subscription_refresh(result["config"].as<std::string>());
     }
 
 #ifdef _WIN32
