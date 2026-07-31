@@ -64,4 +64,18 @@ extern "C" WIN_EXPORT void vpn_network_manager_set_outbound_interface(uint32_t i
  */
 uint32_t vpn_network_manager_get_outbound_interface();
 
+/**
+ * Set whether a VPN tunnel is active in this process.
+ *
+ * While the tunnel is active, outgoing connections must not use the system default route: platform socket
+ * protection handlers must fail if no outbound interface or equivalent platform protection is available.
+ * The state is process-wide and thread-safe.
+ */
+extern "C" WIN_EXPORT void vpn_network_manager_set_tunnel_active(bool active);
+
+/**
+ * Check whether a VPN tunnel is active in this process.
+ */
+bool vpn_network_manager_get_tunnel_active();
+
 } // namespace ag

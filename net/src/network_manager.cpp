@@ -28,6 +28,7 @@ static struct NetworkManagerHolder {
     std::mutex guard;
     ag::LruTimeoutCache<std::string, bool> app_domain_cache;
     std::atomic<uint32_t> outbound_interface = 0;
+    std::atomic_bool tunnel_active = false;
 
     NetworkManagerHolder()
             : app_domain_cache(DEFAULT_CACHE_SIZE, std::chrono::minutes(10)) {
@@ -79,6 +80,15 @@ void vpn_network_manager_set_outbound_interface(uint32_t idx) {
 
 uint32_t vpn_network_manager_get_outbound_interface() {
     return g_network_manager_holder.outbound_interface;
+}
+
+void vpn_network_manager_set_tunnel_active(bool active) {
+    dbglog(g_logger, "Tunnel is {}", active ? "active" : "inactive");
+    g_network_manager_holder.tunnel_active = active;
+}
+
+bool vpn_network_manager_get_tunnel_active() {
+    return g_network_manager_holder.tunnel_active;
 }
 
 } // namespace ag

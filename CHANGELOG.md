@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Process-wide tunnel state tracking to fail closed when an outgoing socket cannot be protected from VPN routing.
+
 ### Changed
 
 ### Deprecated

@@ -198,6 +198,9 @@ public:
     VpnOsTunnel &operator=(VpnOsTunnel &&) = delete;
 
 protected:
+    void mark_tunnel_active();
+    void clear_tunnel_active();
+
     void init_settings(const VpnOsTunnelSettings *settings) {
         m_settings.reset(vpn_os_tunnel_settings_clone(settings));
     }
@@ -206,6 +209,7 @@ protected:
     uint32_t m_if_index = 0;
     bool m_system_dns_setup_success = false;
     bool m_ipv6_available = false;
+    bool m_tunnel_active_owned = false;
 };
 
 #ifdef __linux__
