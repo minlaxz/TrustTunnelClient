@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -64,14 +65,28 @@ extern "C" WIN_EXPORT void vpn_network_manager_set_outbound_interface(uint32_t i
  */
 uint32_t vpn_network_manager_get_outbound_interface();
 
+using VpnTunnelActivityToken = uint64_t;
+
+/** Invalid tunnel activity token. */
+constexpr VpnTunnelActivityToken VPN_TUNNEL_ACTIVITY_TOKEN_INVALID = 0;
+
 /**
- * Set whether a VPN tunnel is active in this process.
+ * Register an active VPN tunnel in this process.
  *
- * While the tunnel is active, outgoing connections must not use the system default route: platform socket
+ * While at least one tunnel is active, outgoing connections must not use the system default route: platform socket
  * protection handlers must fail if no outbound interface or equivalent platform protection is available.
- * The state is process-wide and thread-safe.
+ * The returned ownership token must be released exactly once with
+ * `vpn_network_manager_release_tunnel_activity()` after the tunnel is closed.
+ *
+ * @return A non-zero ownership token.
  */
-extern "C" WIN_EXPORT void vpn_network_manager_set_tunnel_active(bool active);
+extern "C" WIN_EXPORT VpnTunnelActivityToken vpn_network_manager_acquire_tunnel_activity();
+
+/**
+ * Unregister an active VPN tunnel previously registered with `vpn_network_manager_acquire_tunnel_activity()`.
+ * Invalid or already released tokens are ignored.
+ */
+extern "C" WIN_EXPORT void vpn_network_manager_release_tunnel_activity(VpnTunnelActivityToken token);
 
 /**
  * Check whether a VPN tunnel is active in this process.

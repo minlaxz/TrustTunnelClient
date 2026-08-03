@@ -2,33 +2,31 @@
 
 #include "net/network_manager.h"
 
-class NetworkManagerTest : public testing::Test {
-protected:
-    void SetUp() override {
-        ag::vpn_network_manager_set_tunnel_active(false);
-    }
+TEST(NetworkManagerTest, TunnelActiveState) {
+    EXPECT_FALSE(ag::vpn_network_manager_get_tunnel_active());
 
-    void TearDown() override {
-        ag::vpn_network_manager_set_tunnel_active(false);
-    }
-};
+    auto token = ag::vpn_network_manager_acquire_tunnel_activity();
+    EXPECT_NE(ag::VPN_TUNNEL_ACTIVITY_TOKEN_INVALID, token);
+    EXPECT_TRUE(ag::vpn_network_manager_get_tunnel_active());
 
-TEST_F(NetworkManagerTest, TunnelActiveState) {
-    ASSERT_FALSE(ag::vpn_network_manager_get_tunnel_active());
-
-    ag::vpn_network_manager_set_tunnel_active(true);
-    ASSERT_TRUE(ag::vpn_network_manager_get_tunnel_active());
-
-    ag::vpn_network_manager_set_tunnel_active(false);
-    ASSERT_FALSE(ag::vpn_network_manager_get_tunnel_active());
+    ag::vpn_network_manager_release_tunnel_activity(token);
+    EXPECT_FALSE(ag::vpn_network_manager_get_tunnel_active());
 }
 
-TEST_F(NetworkManagerTest, TunnelActiveStateIsIdempotent) {
-    ag::vpn_network_manager_set_tunnel_active(true);
-    ag::vpn_network_manager_set_tunnel_active(true);
-    ASSERT_TRUE(ag::vpn_network_manager_get_tunnel_active());
+TEST(NetworkManagerTest, TunnelActiveUntilLastOwnerReleasesIt) {
+    EXPECT_FALSE(ag::vpn_network_manager_get_tunnel_active());
 
-    ag::vpn_network_manager_set_tunnel_active(false);
-    ag::vpn_network_manager_set_tunnel_active(false);
-    ASSERT_FALSE(ag::vpn_network_manager_get_tunnel_active());
+    auto first = ag::vpn_network_manager_acquire_tunnel_activity();
+    auto second = ag::vpn_network_manager_acquire_tunnel_activity();
+    EXPECT_NE(first, second);
+    EXPECT_TRUE(ag::vpn_network_manager_get_tunnel_active());
+
+    ag::vpn_network_manager_release_tunnel_activity(first);
+    EXPECT_TRUE(ag::vpn_network_manager_get_tunnel_active());
+
+    ag::vpn_network_manager_release_tunnel_activity(first);
+    EXPECT_TRUE(ag::vpn_network_manager_get_tunnel_active());
+
+    ag::vpn_network_manager_release_tunnel_activity(second);
+    EXPECT_FALSE(ag::vpn_network_manager_get_tunnel_active());
 }

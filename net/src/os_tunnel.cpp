@@ -24,16 +24,15 @@ static constexpr std::string_view DEFAULT_IPV6_ROUTE = "::/0";
 static constexpr std::string_view DEFAULT_IPV6_ROUTE_UNICAST = "2000::/3";
 
 void ag::VpnOsTunnel::mark_tunnel_active() {
-    if (!m_tunnel_active_owned) {
-        vpn_network_manager_set_tunnel_active(true);
-        m_tunnel_active_owned = true;
+    if (m_tunnel_activity_token == VPN_TUNNEL_ACTIVITY_TOKEN_INVALID) {
+        m_tunnel_activity_token = vpn_network_manager_acquire_tunnel_activity();
     }
 }
 
 void ag::VpnOsTunnel::clear_tunnel_active() {
-    if (m_tunnel_active_owned) {
-        vpn_network_manager_set_tunnel_active(false);
-        m_tunnel_active_owned = false;
+    if (m_tunnel_activity_token != VPN_TUNNEL_ACTIVITY_TOKEN_INVALID) {
+        vpn_network_manager_release_tunnel_activity(m_tunnel_activity_token);
+        m_tunnel_activity_token = VPN_TUNNEL_ACTIVITY_TOKEN_INVALID;
     }
 }
 
