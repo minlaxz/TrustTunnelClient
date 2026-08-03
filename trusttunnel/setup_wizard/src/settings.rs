@@ -73,7 +73,7 @@ fn build_endpoint(template: Option<&Endpoint>) -> Endpoint {
 
     // A bare --subscription-url is itself an import source in non-interactive
     // mode; in interactive mode it only pre-selects the source in the menu.
-    let subscription_url = if crate::get_mode() == Mode::NonInteractive {
+    let mut subscription_url = if crate::get_mode() == Mode::NonInteractive {
         predefined_params.subscription_url.clone()
     } else {
         None
@@ -85,8 +85,16 @@ fn build_endpoint(template: Option<&Endpoint>) -> Endpoint {
     {
         let selection = crate::user_interaction::select_index(
             "How would you like to provide endpoint configuration?",
-            &["Endpoint config file", "Deep-link URI (tt://...)"],
-            Some(0),
+            &[
+                "Endpoint config file",
+                "Deep-link URI (tt://...)",
+                "Subscription URL (https://...)",
+            ],
+            Some(if predefined_params.subscription_url.is_some() {
+                2
+            } else {
+                0
+            }),
         );
         match selection {
             0 => read_endpoint_config(empty_to_none(ask_for_input(
@@ -95,6 +103,16 @@ fn build_endpoint(template: Option<&Endpoint>) -> Endpoint {
             ))),
             1 => {
                 deeplink_uri = Some(ask_for_input_raw_line("Paste deep-link URI"));
+                None
+            }
+            2 => {
+                subscription_url = Some(ask_for_input(
+                    "Subscription URL",
+                    predefined_params
+                        .subscription_url
+                        .clone()
+                        .or(Some("".to_string())),
+                ));
                 None
             }
             _ => unreachable!(),
@@ -112,8 +130,8 @@ fn build_endpoint(template: Option<&Endpoint>) -> Endpoint {
         endpoint_from_deeplink(uri)
     } else if let Some(config) = &endpoint_config {
         candidate_from_endpoint_config(config)
-    } else if let Some(url) = subscription_url {
-        let mut candidate = candidate_from_subscription_url(url);
+    } else if let Some(url) = subscription_url.as_deref() {
+        let mut candidate = candidate_from_subscription_url(url.to_string());
         candidate.name = predefined_params.name.clone();
         candidate.dns_upstreams = predefined_params.dns.clone();
         candidate
@@ -127,7 +145,7 @@ fn build_endpoint(template: Option<&Endpoint>) -> Endpoint {
                 .expect("Couldn't parse provided certificate");
         }
 
-        if endpoint_config.is_none() {
+        if endpoint_config.is_none() && subscription_url.is_none() {
             x.skip_verification = x.certificate.is_none()
                 && ask_for_agreement_with_default(
                     &format!("{}\n", Endpoint::doc_skip_verification()),
@@ -139,12 +157,31 @@ fn build_endpoint(template: Option<&Endpoint>) -> Endpoint {
     }
 
     if x.subscription.is_some() {
-        if let Err(error) = subscription::fetch_and_apply(&mut x) {
-            if is_complete(&x) {
+        match subscription::fetch_and_apply(&mut x) {
+            Ok(()) => {
+                if crate::get_mode() == Mode::Interactive && subscription_url.is_some() {
+                    let name = ask_for_input::<String>(
+                        "Server name",
+                        x.name.clone().or(Some("".to_string())),
+                    );
+                    if !name.is_empty() {
+                        x.name = Some(name);
+                    }
+                    let dns = ask_for_input::<String>(
+                        "DNS upstreams (space-separated)",
+                        Some(x.dns_upstreams.join(" ")),
+                    );
+                    if !dns.is_empty() {
+                        x.dns_upstreams = dns.split_whitespace().map(str::to_string).collect();
+                    }
+                }
+            }
+            Err(error) if is_complete(&x) => {
                 eprintln!(
                     "WARNING: Could not fetch the subscription; the exported parameters may be stale ({error})"
                 );
-            } else {
+            }
+            Err(error) => {
                 eprintln!("Could not fetch the subscription: {error}");
                 std::process::exit(1);
             }
