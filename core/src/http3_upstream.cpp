@@ -595,6 +595,7 @@ void Http3Upstream::socket_handler(void *arg, UdpSocketEvent what, void *data) {
         if (upstream->m_closed) {
             upstream->close_session_inner(std::exchange(upstream->m_pending_session_error, std::nullopt));
         } else if (!input_error.empty()) {
+            // FIXME: Remove when the server is updated (VPN-2914)
             // Otherwise the session stays `H3US_ESTABLISHED` forever and never reconnects.
             upstream->close_session_inner(VpnError{VPN_EC_ERROR, input_error.c_str()});
         } else if (upstream->m_h3_client) {
