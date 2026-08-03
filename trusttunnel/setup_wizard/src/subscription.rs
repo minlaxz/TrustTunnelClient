@@ -23,6 +23,14 @@ fn fetch_and_apply_with(
     let url = subscription.url.clone();
     let request = HttpRequest::for_endpoint(&url, candidate);
     let response = fetch_subscription(&request, transport)?;
+    // The response fills the creation-only fields only when they are unset:
+    // explicit values always win over the response.
+    if candidate.name.is_none() {
+        candidate.name = response.name.clone();
+    }
+    if candidate.dns_upstreams.is_empty() {
+        candidate.dns_upstreams = response.dns_upstreams.clone().unwrap_or_default();
+    }
     response.apply_to(candidate);
     if let Some(subscription) = &mut candidate.subscription {
         subscription.last_fetched_at = Some(utc_now_rfc3339());
@@ -121,5 +129,49 @@ mod tests {
             .unwrap()
             .last_fetched_at
             .is_none());
+    }
+
+    fn body_with_creation_only_fields() -> Vec<u8> {
+        serde_json::json!({
+            "version": 1,
+            "hostname": "live.example.com",
+            "address": "5.6.7.8:443",
+            "username": "live",
+            "password": "live",
+            "has_ipv6": true,
+            "upstream_protocol": "http3",
+            "anti_dpi": false,
+            "skip_verification": false,
+            "name": "Response Name",
+            "dns_upstreams": ["tls://9.9.9.9"]
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    #[test]
+    fn response_fills_creation_only_fields_when_unset() {
+        let mut candidate = complete_candidate();
+        fetch_and_apply_with(
+            &mut candidate,
+            &FakeTransport(Ok(body_with_creation_only_fields())),
+        )
+        .unwrap();
+        assert_eq!(candidate.name.as_deref(), Some("Response Name"));
+        assert_eq!(candidate.dns_upstreams, vec!["tls://9.9.9.9".to_string()]);
+    }
+
+    #[test]
+    fn explicit_creation_only_values_win_over_response() {
+        let mut candidate = complete_candidate();
+        candidate.name = Some("Explicit".to_string());
+        candidate.dns_upstreams = vec!["tls://1.1.1.1".to_string()];
+        fetch_and_apply_with(
+            &mut candidate,
+            &FakeTransport(Ok(body_with_creation_only_fields())),
+        )
+        .unwrap();
+        assert_eq!(candidate.name.as_deref(), Some("Explicit"));
+        assert_eq!(candidate.dns_upstreams, vec!["tls://1.1.1.1".to_string()]);
     }
 }

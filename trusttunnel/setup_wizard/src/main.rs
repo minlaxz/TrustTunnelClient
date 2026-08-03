@@ -22,6 +22,9 @@ const SETTINGS_FILE_PARAM_NAME: &str = "settings";
 const ENDPOINT_CONFIG_PARAM_NAME: &str = "endpoint_config";
 const CUSTOM_SNI_PARAM_NAME: &str = "custom_sni";
 const DEEPLINK_PARAM_NAME: &str = "deeplink";
+const SUBSCRIPTION_URL_PARAM_NAME: &str = "subscription-url";
+const NAME_PARAM_NAME: &str = "name";
+const DNS_PARAM_NAME: &str = "dns";
 
 #[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq)]
 pub enum Mode {
@@ -45,6 +48,9 @@ pub struct PredefinedParameters {
     endpoint_config: Option<String>,
     settings_file: Option<String>,
     pub deeplink: Option<String>,
+    subscription_url: Option<String>,
+    name: Option<String>,
+    dns: Vec<String>,
 }
 
 impl PredefinedParameters {
@@ -65,6 +71,12 @@ impl PredefinedParameters {
             endpoint_config: args.get_one::<String>(ENDPOINT_CONFIG_PARAM_NAME).cloned(),
             settings_file: args.get_one::<String>(SETTINGS_FILE_PARAM_NAME).cloned(),
             deeplink: args.get_one::<String>(DEEPLINK_PARAM_NAME).cloned(),
+            subscription_url: args.get_one::<String>(SUBSCRIPTION_URL_PARAM_NAME).cloned(),
+            name: args.get_one::<String>(NAME_PARAM_NAME).cloned(),
+            dns: args
+                .get_many::<String>(DNS_PARAM_NAME)
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
         }
     }
 }
@@ -174,6 +186,24 @@ Required in non-interactive mode."#),
                 .conflicts_with("separate_options")
                 .conflicts_with(ENDPOINT_CONFIG_PARAM_NAME)
                 .help(format!("A tt:// deep-link URI containing the endpoint configuration.\nConflicts with --endpoint_config and manual options (--{}, --{}, --{}).", ENDPOINT_ADDRESS_PARAM_NAME, HOSTNAME_PARAM_NAME, CREDENTIALS_PARAM_NAME)),
+            clap::Arg::new(SUBSCRIPTION_URL_PARAM_NAME)
+                .long("subscription-url")
+                .action(clap::ArgAction::Set)
+                .value_parser(clap::builder::NonEmptyStringValueParser::new())
+                .conflicts_with("separate_options")
+                .conflicts_with(ENDPOINT_CONFIG_PARAM_NAME)
+                .conflicts_with(DEEPLINK_PARAM_NAME)
+                .help("A subscription URL to import the server parameters from.\nConflicts with --endpoint_config, --deeplink and the manual options."),
+            clap::Arg::new(NAME_PARAM_NAME)
+                .long("name")
+                .action(clap::ArgAction::Set)
+                .value_parser(clap::builder::NonEmptyStringValueParser::new())
+                .help("Display name of the server entry."),
+            clap::Arg::new(DNS_PARAM_NAME)
+                .long("dns")
+                .action(clap::ArgAction::Append)
+                .value_parser(clap::builder::NonEmptyStringValueParser::new())
+                .help("A DNS upstream, e.g. tls://8.8.8.8. Repeatable."),
         ])
         .group(
             clap::ArgGroup::new("separate_options")
@@ -203,7 +233,8 @@ Required in non-interactive mode."#),
     if get_mode() == Mode::NonInteractive
         && !(args.contains_id(ENDPOINT_CONFIG_PARAM_NAME)
             || args.contains_id(HOSTNAME_PARAM_NAME)
-            || args.contains_id(DEEPLINK_PARAM_NAME))
+            || args.contains_id(DEEPLINK_PARAM_NAME)
+            || args.contains_id(SUBSCRIPTION_URL_PARAM_NAME))
     {
         command
             .error(
@@ -221,6 +252,10 @@ OR
 OR
 3. A deep-link URI:
    --deeplink "tt://..."
+
+OR
+4. A subscription URL:
+   --subscription-url <url>
 
 Note: Cannot mix these variants"#,
             )

@@ -66,9 +66,18 @@ pub fn build(template: Option<&Settings>) -> Settings {
 fn build_endpoint(template: Option<&Endpoint>) -> Endpoint {
     let predefined_params = crate::get_predefined_params().clone();
 
-    // Pick the import source: a deep-link (CLI flag or interactive choice)
-    // or an endpoint config file; neither means manual assembly below.
+    // Pick the import source: a deep-link (CLI flag or interactive choice),
+    // an endpoint config file, or a bare subscription URL; none of those
+    // means manual assembly below.
     let mut deeplink_uri = predefined_params.deeplink.clone();
+
+    // A bare --subscription-url is itself an import source in non-interactive
+    // mode; in interactive mode it only pre-selects the source in the menu.
+    let subscription_url = if crate::get_mode() == Mode::NonInteractive {
+        predefined_params.subscription_url.clone()
+    } else {
+        None
+    };
 
     let endpoint_config: Option<EndpointConfig> = if deeplink_uri.is_some() {
         None
@@ -103,6 +112,11 @@ fn build_endpoint(template: Option<&Endpoint>) -> Endpoint {
         endpoint_from_deeplink(uri)
     } else if let Some(config) = &endpoint_config {
         candidate_from_endpoint_config(config)
+    } else if let Some(url) = subscription_url {
+        let mut candidate = candidate_from_subscription_url(url);
+        candidate.name = predefined_params.name.clone();
+        candidate.dns_upstreams = predefined_params.dns.clone();
+        candidate
     } else {
         build_endpoint_manually(template, &predefined_params)
     };
@@ -441,6 +455,18 @@ fn candidate_from_endpoint_config(config: &EndpointConfig) -> Endpoint {
                 last_fetched_at: None,
             }
         }),
+    }
+}
+
+/// Build a candidate carrying only a subscription URL; the subscription
+/// fetch fills in everything else.
+fn candidate_from_subscription_url(url: String) -> Endpoint {
+    Endpoint {
+        subscription: Some(trusttunnel_settings::EndpointSubscription {
+            url,
+            last_fetched_at: None,
+        }),
+        ..Endpoint::default()
     }
 }
 
@@ -784,5 +810,15 @@ subscription_url = "https://u:p@vpn.example.com/subscription"
         assert!(is_complete(&endpoint));
         endpoint.addresses = vec!["".to_string()];
         assert!(!is_complete(&endpoint));
+    }
+
+    #[test]
+    fn bare_url_candidate_is_subscription_only() {
+        let candidate = candidate_from_subscription_url("https://u:p@h/s".to_string());
+        assert!(!is_complete(&candidate));
+        assert_eq!(
+            candidate.subscription.as_ref().map(|s| s.url.as_str()),
+            Some("https://u:p@h/s")
+        );
     }
 }
