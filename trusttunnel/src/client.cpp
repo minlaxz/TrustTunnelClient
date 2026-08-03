@@ -40,10 +40,16 @@ TrustTunnelClient::~TrustTunnelClient() {
 }
 
 Error<TrustTunnelClient::ConnectResultError> TrustTunnelClient::connect(ListenerSettings listener_settings) {
+    std::lock_guard lock(m_reload_mutex);
     return connect_impl(std::move(listener_settings));
 }
 
 int TrustTunnelClient::disconnect() {
+    std::lock_guard lock(m_reload_mutex);
+    return disconnect_impl();
+}
+
+int TrustTunnelClient::disconnect_impl() {
     if (Vpn *vpn = m_vpn.exchange(nullptr)) {
         vpn_stop(vpn);
         // `_dispatch_sync` on a stopped loop blocks forever.
@@ -132,7 +138,7 @@ Error<TrustTunnelClient::ConnectResultError> TrustTunnelClient::connect_impl(Lis
     auto r = vpn_runner(std::move(listener_settings));
 
     if (r) {
-        disconnect();
+        disconnect_impl();
     }
     return r;
 }
@@ -540,5 +546,12 @@ void TrustTunnelClient::vpn_handler(void *, VpnEvent what, void *data) {
         break;
     }
 } // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+
+Error<TrustTunnelClient::ConnectResultError> TrustTunnelClient::reload(TrustTunnelConfig &&config) {
+    std::lock_guard lock(m_reload_mutex);
+    disconnect_impl();
+    m_config = std::move(config);
+    return connect_impl(AutoSetup{});
+}
 
 } // namespace ag

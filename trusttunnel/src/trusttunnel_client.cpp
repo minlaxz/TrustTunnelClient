@@ -1,9 +1,11 @@
 #include <atomic>
 #include <condition_variable>
 #include <csignal>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -27,10 +29,6 @@
 
 #ifdef __APPLE__
 #include "AppleSleepNotifier.h"
-#endif
-
-#ifdef _WIN32
-#include <filesystem>
 #endif
 
 #ifdef __linux__
@@ -67,6 +65,62 @@ static void stop_trusttunnel_client() {
     g_waiter.notify_all();
 }
 
+#ifndef _WIN32
+struct ReloadContext {
+    std::string config_path;
+    std::optional<bool> skip_verification_override;
+    std::optional<std::string> loglevel_override;
+};
+
+static std::mutex g_reload_mutex;
+static std::optional<ReloadContext> g_reload_context;
+
+static void reload_client_config() {
+    auto client = g_client.lock();
+    if (!client) {
+        return;
+    }
+    std::optional<ReloadContext> context;
+    {
+        std::lock_guard lock(g_reload_mutex);
+        context = g_reload_context;
+    }
+    if (!context || !keep_running.load()) {
+        return;
+    }
+
+    infolog(g_logger, "Reloading configuration after SIGHUP");
+    toml::parse_result parse_result = toml::parse_file(context->config_path);
+    if (!parse_result) {
+        errlog(g_logger, "Failed parsing configuration, keeping the previous one: {}",
+                parse_result.error().description());
+        return;
+    }
+
+    std::optional config = TrustTunnelConfig::build_config(parse_result.table());
+    if (!config) {
+        errlog(g_logger, "Failed to parse config, keeping the previous one");
+        return;
+    }
+
+    if (context->skip_verification_override.has_value()) {
+        config->location.skip_verification = *context->skip_verification_override;
+    }
+    if (context->loglevel_override.has_value()) {
+        if (auto loglevel = TrustTunnelCliUtils::parse_loglevel(*context->loglevel_override)) {
+            config->loglevel = *loglevel;
+        }
+    }
+    ag::Logger::set_log_level(config->loglevel);
+
+    if (auto err = client->reload(std::move(*config))) {
+        errlog(g_logger, "Failed to apply the reloaded configuration: {}", err->str());
+        return;
+    }
+    infolog(g_logger, "Configuration reloaded");
+}
+#endif // _WIN32
+
 static void sighandler(int sig) {
     signal(SIGINT, SIG_DFL);
     signal(SIGTERM, SIG_DFL);
@@ -74,12 +128,7 @@ static void sighandler(int sig) {
     if (auto client = g_client.lock()) {
 #ifndef _WIN32
         if (sig == SIGHUP) {
-            client->notify_network_change(ag::VPN_NS_NOT_CONNECTED);
-            std::thread t([client]() {
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-                client->notify_network_change(ag::VPN_NS_CONNECTED);
-            });
-            t.detach();
+            reload_client_config();
             return;
         }
 #endif
@@ -169,7 +218,14 @@ int main(int argc, char **argv) {
 }
 
 int run_client(const cxxopts::ParseResult &cli_args) {
-    toml::parse_result parse_result = toml::parse_file(cli_args["config"].as<std::string>());
+#ifdef _WIN32
+    const std::string config_path = cli_args["config"].as<std::string>();
+#else
+    const std::string config_path =
+            std::filesystem::absolute(cli_args["config"].as<std::string>()).lexically_normal().string();
+#endif
+
+    toml::parse_result parse_result = toml::parse_file(config_path);
     if (!parse_result) {
         errlog(g_logger, "Failed parsing configuration: {}", parse_result.error().description());
         return 1;
@@ -202,6 +258,18 @@ int run_client(const cxxopts::ParseResult &cli_args) {
 
     auto client = std::make_shared<TrustTunnelClient>(std::move(config), std::move(callbacks));
     g_client = client;
+#ifndef _WIN32
+    {
+        std::lock_guard lock(g_reload_mutex);
+        g_reload_context = {
+                .config_path = config_path,
+                .skip_verification_override =
+                        cli_args.count("s") > 0 ? std::optional(cli_args["s"].as<bool>()) : std::nullopt,
+                .loglevel_override =
+                        cli_args.count("l") > 0 ? std::optional(cli_args["l"].as<std::string>()) : std::nullopt,
+        };
+    }
+#endif
     AutoNetworkMonitor network_monitor(client.get(), std::move(bound_if));
     if (!network_monitor.start()) {
         errlog(g_logger, "Failed to start network monitor");
@@ -249,6 +317,12 @@ int run_client(const cxxopts::ParseResult &cli_args) {
 #endif
 
     network_monitor.stop();
+#ifndef _WIN32
+    {
+        std::lock_guard lock(g_reload_mutex);
+        g_reload_context.reset();
+    }
+#endif
     client->disconnect();
 
     return 0;
