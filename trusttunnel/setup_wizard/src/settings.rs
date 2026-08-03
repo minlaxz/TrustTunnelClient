@@ -65,244 +65,209 @@ pub fn build(template: Option<&Settings>) -> Settings {
 fn build_endpoint(template: Option<&Endpoint>) -> Endpoint {
     let predefined_params = crate::get_predefined_params().clone();
 
-    // Deep-link import: if provided via CLI, decode and return immediately
-    if let Some(ref deeplink_uri) = predefined_params.deeplink {
-        return endpoint_from_deeplink(deeplink_uri);
-    }
+    // Pick the import source: a deep-link (CLI flag or interactive choice)
+    // or an endpoint config file; neither means manual assembly below.
+    let mut deeplink_uri = predefined_params.deeplink.clone();
 
-    // In interactive mode, offer a choice between config file and deep-link
-    let endpoint_config: Option<EndpointConfig> =
-        if crate::get_mode() == Mode::Interactive && predefined_params.endpoint_config.is_none() {
-            let selection = crate::user_interaction::select_index(
-                "How would you like to provide endpoint configuration?",
-                &["Endpoint config file", "Deep-link URI (tt://...)"],
-                Some(0),
-            );
-            match selection {
-                0 => {
-                    // Endpoint config file path
-                    empty_to_none(ask_for_input(
-                        "Path to endpoint config, empty if no",
-                        Some("".to_string()),
-                    ))
-                    .and_then(|x| {
-                        fs::read_to_string(&x)
-                            .map_err(|e| panic!("Failed to read endpoint config file:\n{}", e))
-                            .ok()
-                    })
-                    .and_then(|x| {
-                        toml::de::from_str(x.as_str())
-                            .map_err(|e| panic!("Failed to parse endpoint config:\n{}", e))
-                            .ok()
-                    })
-                }
-                1 => {
-                    // Deep-link URI
-                    let uri = ask_for_input_raw_line("Paste deep-link URI");
-                    return endpoint_from_deeplink(&uri);
-                }
-                _ => unreachable!(),
-            }
-        } else {
-            empty_to_none(ask_for_input(
+    let endpoint_config: Option<EndpointConfig> = if deeplink_uri.is_some() {
+        None
+    } else if crate::get_mode() == Mode::Interactive && predefined_params.endpoint_config.is_none()
+    {
+        let selection = crate::user_interaction::select_index(
+            "How would you like to provide endpoint configuration?",
+            &["Endpoint config file", "Deep-link URI (tt://...)"],
+            Some(0),
+        );
+        match selection {
+            0 => read_endpoint_config(empty_to_none(ask_for_input(
                 "Path to endpoint config, empty if no",
-                predefined_params.endpoint_config.or(Some("".to_string())),
-            ))
-            .and_then(|x| {
-                fs::read_to_string(&x)
-                    .map_err(|e| panic!("Failed to read endpoint config file:\n{}", e))
-                    .ok()
-            })
-            .and_then(|x| {
-                toml::de::from_str(x.as_str())
-                    .map_err(|e| panic!("Failed to parse endpoint config:\n{}", e))
-                    .ok()
-            })
-        };
-    let mut x = Endpoint {
-        addresses: endpoint_config
-            .as_ref()
-            .and_then(|x| x.addresses.clone().into())
-            .or_else(|| {
-                ask_for_input::<String>(
-                    &format!(
-                        "{}\nMust be delimited by whitespace.\n",
-                        Endpoint::doc_addresses()
-                    ),
-                    predefined_params
-                        .endpoint_addresses
-                        .or(opt_field!(template, addresses).cloned())
-                        .map(|x| x.join(" ")),
-                )
-                .split_whitespace()
-                .map(String::from)
-                .collect::<Vec<String>>()
-                .into()
-            })
-            .unwrap(),
-        has_ipv6: endpoint_config
-            .as_ref()
-            .and_then(|x| x.has_ipv6.into())
-            .or(opt_field!(template, has_ipv6).cloned())
-            .unwrap_or_else(Endpoint::default_has_ipv6),
-        username: endpoint_config
-            .as_ref()
-            .and_then(|x| x.username.clone().into())
-            .or_else(|| {
-                ask_for_input(
-                    Endpoint::doc_username(),
-                    predefined_params
-                        .credentials
-                        .clone()
-                        .unzip()
-                        .0
-                        .or(opt_field!(template, username).cloned()),
-                )
-                .into()
-            })
-            .unwrap(),
-        password: endpoint_config
-            .as_ref()
-            .and_then(|x| x.password.clone().into())
-            .or_else(|| {
-                predefined_params
-                    .credentials
-                    .unzip()
-                    .1
-                    .unwrap_or_else(|| {
-                        opt_field!(template, password)
-                            .cloned()
-                            .and_then(empty_to_none)
-                            .and_then(|x| {
-                                ask_for_agreement("Overwrite password?").not().then_some(x)
-                            })
-                            .unwrap_or_else(|| ask_for_password(Endpoint::doc_password()))
-                    })
-                    .into()
-            })
-            .unwrap(),
-        client_random: endpoint_config
-            .as_ref()
-            .and_then(|x| x.client_random.clone().into())
-            .or(opt_field!(template, client_random).cloned())
-            .unwrap_or_default(),
-        skip_verification: endpoint_config
-            .as_ref()
-            .and_then(|x| x.skip_verification.into())
-            .or(opt_field!(template, skip_verification).cloned())
-            .unwrap_or_else(Endpoint::default_skip_verification),
-        upstream_protocol: endpoint_config
-            .as_ref()
-            .and_then(|x| x.upstream_protocol.clone().into())
-            .or(opt_field!(template, upstream_protocol).cloned())
-            .unwrap_or_else(Endpoint::default_upstream_protocol),
-        anti_dpi: endpoint_config
-            .as_ref()
-            .and_then(|x| x.anti_dpi.into())
-            .or(opt_field!(template, anti_dpi).cloned())
-            .unwrap_or_else(Endpoint::default_anti_dpi),
-        custom_sni: endpoint_config
-            .as_ref()
-            .and_then(|x| empty_to_none(x.custom_sni.clone()))
-            .unwrap_or_default(),
-        dns_upstreams: endpoint_config
-            .as_ref()
-            .map(|x| x.dns_upstreams.clone())
-            .or_else(|| {
-                ask_for_input::<String>(
-                    &format!(
-                        "{}\nDelimit by whitespace, leave empty for default.",
-                        Endpoint::doc_dns_upstreams()
-                    ),
-                    opt_field!(template, dns_upstreams)
-                        .map(|v| v.join(" "))
-                        .or(Some("".to_string())),
-                )
-                .split_whitespace()
-                .map(String::from)
-                .collect::<Vec<String>>()
-                .into()
-            })
-            .unwrap_or_default(),
-        ..Default::default()
+                Some("".to_string()),
+            ))),
+            1 => {
+                deeplink_uri = Some(ask_for_input_raw_line("Paste deep-link URI"));
+                None
+            }
+            _ => unreachable!(),
+        }
+    } else {
+        read_endpoint_config(empty_to_none(ask_for_input(
+            "Path to endpoint config, empty if no",
+            predefined_params
+                .endpoint_config
+                .clone()
+                .or(Some("".to_string())),
+        )))
+    };
+    let mut x = if let Some(uri) = deeplink_uri.as_deref() {
+        endpoint_from_deeplink(uri)
+    } else if let Some(config) = &endpoint_config {
+        candidate_from_endpoint_config(config)
+    } else {
+        build_endpoint_manually(template, &predefined_params)
     };
 
-    if let Some(config) = &endpoint_config {
-        x.hostname = config.hostname.clone();
-        x.certificate = empty_to_none(config.certificate.clone());
-    } else {
-        let (hostname, certificate) = if crate::get_mode() == Mode::NonInteractive {
-            (
-                predefined_params.hostname.clone(),
-                predefined_params.certificate.and_then(|x| {
-                    fs::read_to_string(&x)
-                        .expect("Failed to read certificate")
-                        .into()
-                }),
-            )
-        } else if let Some(cert) = opt_field!(template, certificate)
-            .cloned()
-            .flatten()
-            .and_then(parse_cert)
-            .and_then(|x| {
-                ask_for_agreement(&format!("Use an existent certificate? {:?}", x)).then_some(x)
-            })
-        {
-            (
-                Some(cert.common_name),
-                opt_field!(template, certificate).cloned().flatten(),
-            )
-        } else if let Some(cert) = empty_to_none(ask_for_input::<String>(
-            &format!(
-                "{}\nEnter a path to certificate:",
-                Endpoint::doc_certificate()
-            ),
-            Some("".into()),
-        )) {
-            let contents = fs::read_to_string(&cert).expect("Failed to read certificate");
-            match parse_cert(contents.clone()) {
-                Some(parsed) => (Some(parsed.common_name), Some(contents)),
-                None => {
-                    panic!("Couldn't parse provided certificate");
-                }
-            }
-        } else {
-            (None, None)
-        };
+    if deeplink_uri.is_none() {
+        if x.certificate.is_some() {
+            parse_cert(x.certificate.clone().unwrap())
+                .expect("Couldn't parse provided certificate");
+        }
 
-        x.hostname = ask_for_input(
-            Endpoint::doc_hostname(),
-            predefined_params
-                .hostname
-                .or(opt_field!(template, hostname).cloned())
-                .or(hostname),
-        );
-        x.custom_sni = empty_to_none(ask_for_input(
-            &format!("{}\nLeave empty if not needed.", Endpoint::doc_custom_sni()),
-            predefined_params
-                .custom_sni
-                .or(opt_field!(template, custom_sni).cloned())
-                .or(Some("".to_string())),
-        ))
-        .unwrap_or_default();
-        x.certificate = certificate;
-    }
-
-    if x.certificate.is_some() {
-        parse_cert(x.certificate.clone().unwrap()).expect("Couldn't parse provided certificate");
-    }
-
-    if endpoint_config.is_none() {
-        x.skip_verification = x.certificate.is_none()
-            && ask_for_agreement_with_default(
-                &format!("{}\n", Endpoint::doc_skip_verification()),
-                opt_field!(template, skip_verification)
-                    .cloned()
-                    .unwrap_or_default(),
-            );
+        if endpoint_config.is_none() {
+            x.skip_verification = x.certificate.is_none()
+                && ask_for_agreement_with_default(
+                    &format!("{}\n", Endpoint::doc_skip_verification()),
+                    opt_field!(template, skip_verification)
+                        .cloned()
+                        .unwrap_or_default(),
+                );
+        }
     }
 
     x
+}
+
+fn build_endpoint_manually(
+    template: Option<&Endpoint>,
+    predefined_params: &crate::PredefinedParameters,
+) -> Endpoint {
+    let mut x = Endpoint {
+        addresses: ask_for_input::<String>(
+            &format!(
+                "{}\nMust be delimited by whitespace.\n",
+                Endpoint::doc_addresses()
+            ),
+            predefined_params
+                .endpoint_addresses
+                .clone()
+                .or(opt_field!(template, addresses).cloned())
+                .map(|x| x.join(" ")),
+        )
+        .split_whitespace()
+        .map(String::from)
+        .collect(),
+        has_ipv6: opt_field!(template, has_ipv6)
+            .cloned()
+            .unwrap_or_else(Endpoint::default_has_ipv6),
+        username: ask_for_input(
+            Endpoint::doc_username(),
+            predefined_params
+                .credentials
+                .clone()
+                .unzip()
+                .0
+                .or(opt_field!(template, username).cloned()),
+        ),
+        password: predefined_params
+            .credentials
+            .clone()
+            .unzip()
+            .1
+            .unwrap_or_else(|| {
+                opt_field!(template, password)
+                    .cloned()
+                    .and_then(empty_to_none)
+                    .and_then(|x| ask_for_agreement("Overwrite password?").not().then_some(x))
+                    .unwrap_or_else(|| ask_for_password(Endpoint::doc_password()))
+            }),
+        client_random: opt_field!(template, client_random)
+            .cloned()
+            .unwrap_or_default(),
+        skip_verification: opt_field!(template, skip_verification)
+            .cloned()
+            .unwrap_or_else(Endpoint::default_skip_verification),
+        upstream_protocol: opt_field!(template, upstream_protocol)
+            .cloned()
+            .unwrap_or_else(Endpoint::default_upstream_protocol),
+        anti_dpi: opt_field!(template, anti_dpi)
+            .cloned()
+            .unwrap_or_else(Endpoint::default_anti_dpi),
+        dns_upstreams: ask_for_input::<String>(
+            &format!(
+                "{}\nDelimit by whitespace, leave empty for default.",
+                Endpoint::doc_dns_upstreams()
+            ),
+            opt_field!(template, dns_upstreams)
+                .map(|v| v.join(" "))
+                .or(Some("".to_string())),
+        )
+        .split_whitespace()
+        .map(String::from)
+        .collect(),
+        ..Default::default()
+    };
+
+    let (hostname, certificate) = if crate::get_mode() == Mode::NonInteractive {
+        (
+            predefined_params.hostname.clone(),
+            predefined_params.certificate.clone().and_then(|x| {
+                fs::read_to_string(&x)
+                    .expect("Failed to read certificate")
+                    .into()
+            }),
+        )
+    } else if let Some(cert) = opt_field!(template, certificate)
+        .cloned()
+        .flatten()
+        .and_then(parse_cert)
+        .and_then(|x| {
+            ask_for_agreement(&format!("Use an existent certificate? {:?}", x)).then_some(x)
+        })
+    {
+        (
+            Some(cert.common_name),
+            opt_field!(template, certificate).cloned().flatten(),
+        )
+    } else if let Some(cert) = empty_to_none(ask_for_input::<String>(
+        &format!(
+            "{}\nEnter a path to certificate:",
+            Endpoint::doc_certificate()
+        ),
+        Some("".into()),
+    )) {
+        let contents = fs::read_to_string(&cert).expect("Failed to read certificate");
+        match parse_cert(contents.clone()) {
+            Some(parsed) => (Some(parsed.common_name), Some(contents)),
+            None => {
+                panic!("Couldn't parse provided certificate");
+            }
+        }
+    } else {
+        (None, None)
+    };
+
+    x.hostname = ask_for_input(
+        Endpoint::doc_hostname(),
+        predefined_params
+            .hostname
+            .clone()
+            .or(opt_field!(template, hostname).cloned())
+            .or(hostname),
+    );
+    x.custom_sni = empty_to_none(ask_for_input(
+        &format!("{}\nLeave empty if not needed.", Endpoint::doc_custom_sni()),
+        predefined_params
+            .custom_sni
+            .clone()
+            .or(opt_field!(template, custom_sni).cloned())
+            .or(Some("".to_string())),
+    ))
+    .unwrap_or_default();
+    x.certificate = certificate;
+
+    x
+}
+
+fn read_endpoint_config(path: Option<String>) -> Option<EndpointConfig> {
+    path.and_then(|x| {
+        fs::read_to_string(&x)
+            .map_err(|e| panic!("Failed to read endpoint config file:\n{}", e))
+            .ok()
+    })
+    .and_then(|x| {
+        toml::de::from_str(x.as_str())
+            .map_err(|e| panic!("Failed to parse endpoint config:\n{}", e))
+            .ok()
+    })
 }
 
 fn build_listener(template: Option<&Listener>) -> Listener {
@@ -434,6 +399,45 @@ pub struct EndpointConfig {
     custom_sni: String,
     #[serde(default)]
     dns_upstreams: Vec<String>,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    subscription_url: Option<String>,
+}
+
+/// Normalize one import source into a candidate endpoint, before any subscription overlay runs
+fn candidate_from_endpoint_config(config: &EndpointConfig) -> Endpoint {
+    Endpoint {
+        hostname: config.hostname.clone(),
+        addresses: config.addresses.clone(),
+        has_ipv6: config.has_ipv6,
+        username: config.username.clone(),
+        password: config.password.clone(),
+        client_random: config.client_random.clone(),
+        skip_verification: config.skip_verification,
+        certificate: empty_to_none(config.certificate.clone()),
+        upstream_protocol: config.upstream_protocol.clone(),
+        anti_dpi: config.anti_dpi,
+        custom_sni: config.custom_sni.clone(),
+        dns_upstreams: config.dns_upstreams.clone(),
+        name: empty_to_none(config.name.clone()),
+        subscription: config.subscription_url.clone().map(|url| {
+            trusttunnel_settings::EndpointSubscription {
+                url,
+                last_fetched_at: None,
+            }
+        }),
+    }
+}
+
+/// Check that the fields required to connect are all non-empty
+#[allow(dead_code)] // used by the subscription overlay
+fn is_complete(endpoint: &Endpoint) -> bool {
+    !endpoint.hostname.is_empty()
+        && !endpoint.addresses.is_empty()
+        && endpoint.addresses.iter().all(|a| !a.is_empty())
+        && !endpoint.username.is_empty()
+        && !endpoint.password.is_empty()
 }
 
 #[derive(Debug)]
@@ -706,5 +710,66 @@ client_random_prefix = "aabb/16"
         let toml_str = "client_random = \"ccdd\"\n";
         let config: EndpointConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.client_random, "ccdd");
+    }
+
+    #[test]
+    fn endpoint_config_reads_subscription_url() {
+        let toml_str = r#"
+hostname = "vpn.example.com"
+subscription_url = "https://u:p@vpn.example.com/subscription"
+"#;
+        let config: EndpointConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.subscription_url.as_deref(),
+            Some("https://u:p@vpn.example.com/subscription")
+        );
+    }
+
+    #[test]
+    fn candidate_from_endpoint_config_carries_subscription() {
+        let config: EndpointConfig = toml::from_str(
+            r#"
+hostname = "vpn.example.com"
+addresses = ["1.2.3.4:443"]
+username = "alice"
+password = "s3cr3t"
+subscription_url = "https://u:p@vpn.example.com/subscription"
+"#,
+        )
+        .unwrap();
+        let candidate = candidate_from_endpoint_config(&config);
+        assert_eq!(candidate.hostname, "vpn.example.com");
+        assert_eq!(
+            candidate.subscription.as_ref().map(|s| s.url.as_str()),
+            Some("https://u:p@vpn.example.com/subscription")
+        );
+        assert!(candidate.subscription.unwrap().last_fetched_at.is_none());
+    }
+
+    #[test]
+    fn candidate_without_subscription_url_has_no_table() {
+        let config: EndpointConfig = toml::from_str("hostname = \"h\"\n").unwrap();
+        let candidate = candidate_from_endpoint_config(&config);
+        assert!(candidate.subscription.is_none());
+    }
+
+    #[test]
+    fn candidate_from_endpoint_config_maps_name() {
+        let config: EndpointConfig = toml::from_str("name = \"Example VPN\"\n").unwrap();
+        let candidate = candidate_from_endpoint_config(&config);
+        assert_eq!(candidate.name.as_deref(), Some("Example VPN"));
+    }
+
+    #[test]
+    fn completeness_matches_cpp_build_endpoint() {
+        let mut endpoint = trusttunnel_settings::Endpoint::default();
+        assert!(!is_complete(&endpoint));
+        endpoint.hostname = "h".to_string();
+        endpoint.addresses = vec!["1.2.3.4:443".to_string()];
+        endpoint.username = "u".to_string();
+        endpoint.password = "p".to_string();
+        assert!(is_complete(&endpoint));
+        endpoint.addresses = vec!["".to_string()];
+        assert!(!is_complete(&endpoint));
     }
 }
