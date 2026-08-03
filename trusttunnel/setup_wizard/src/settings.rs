@@ -420,7 +420,7 @@ pub struct EndpointConfig {
     username: String,
     #[serde(default)]
     password: String,
-    #[serde(default)]
+    #[serde(default, alias = "client_random_prefix")]
     client_random: String,
     #[serde(default)]
     skip_verification: bool,
@@ -686,5 +686,25 @@ mod tests {
     fn test_verify_deeplink_certificates_invalid_der() {
         let result = std::panic::catch_unwind(|| verify_deeplink_certificates(&[0xFF, 0x00, 0x01]));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn endpoint_config_reads_client_random_prefix() {
+        let toml_str = r#"
+hostname = "vpn.example.com"
+addresses = ["1.2.3.4:443"]
+username = "alice"
+password = "s3cr3t"
+client_random_prefix = "aabb/16"
+"#;
+        let config: EndpointConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.client_random, "aabb/16");
+    }
+
+    #[test]
+    fn endpoint_config_still_reads_client_random() {
+        let toml_str = "client_random = \"ccdd\"\n";
+        let config: EndpointConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.client_random, "ccdd");
     }
 }
