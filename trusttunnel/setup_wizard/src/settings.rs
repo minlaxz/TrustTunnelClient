@@ -1,5 +1,6 @@
 pub use trusttunnel_settings::{Endpoint, Listener, Settings, SocksListener, TunListener};
 
+use crate::subscription;
 use crate::user_interaction::{
     ask_for_agreement, ask_for_agreement_with_default, ask_for_input, ask_for_input_raw_line,
     ask_for_password, select_variant,
@@ -120,6 +121,19 @@ fn build_endpoint(template: Option<&Endpoint>) -> Endpoint {
                         .cloned()
                         .unwrap_or_default(),
                 );
+        }
+    }
+
+    if x.subscription.is_some() {
+        if let Err(error) = subscription::fetch_and_apply(&mut x) {
+            if is_complete(&x) {
+                eprintln!(
+                    "WARNING: Could not fetch the subscription; the exported parameters may be stale ({error})"
+                );
+            } else {
+                eprintln!("Could not fetch the subscription: {error}");
+                std::process::exit(1);
+            }
         }
     }
 
@@ -431,7 +445,6 @@ fn candidate_from_endpoint_config(config: &EndpointConfig) -> Endpoint {
 }
 
 /// Check that the fields required to connect are all non-empty
-#[allow(dead_code)] // used by the subscription overlay
 fn is_complete(endpoint: &Endpoint) -> bool {
     !endpoint.hostname.is_empty()
         && !endpoint.addresses.is_empty()

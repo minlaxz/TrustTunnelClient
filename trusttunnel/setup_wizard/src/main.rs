@@ -7,6 +7,7 @@ use std::sync::{Mutex, MutexGuard};
 use trusttunnel_settings::composer;
 
 mod settings;
+mod subscription;
 mod user_interaction;
 mod version;
 
