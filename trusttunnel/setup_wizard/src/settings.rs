@@ -126,36 +126,26 @@ fn build_endpoint(template: Option<&Endpoint>) -> Endpoint {
                 .or(Some("".to_string())),
         )))
     };
-    let mut x = if let Some(uri) = deeplink_uri.as_deref() {
-        endpoint_from_deeplink(uri)
+    // Build the candidate from the selected import source. A deep-link's
+    // verified certificate info is kept aside for the confirmation summary.
+    let (mut x, deeplink_cert_infos) = if let Some(uri) = deeplink_uri.as_deref() {
+        let (endpoint, cert_infos) = endpoint_from_deeplink(uri);
+        (endpoint, Some(cert_infos))
     } else if let Some(config) = &endpoint_config {
-        candidate_from_endpoint_config(config)
+        (candidate_from_endpoint_config(config), None)
     } else if let Some(url) = subscription_url.as_deref() {
         let mut candidate = candidate_from_subscription_url(url.to_string());
         candidate.name = predefined_params.name.clone();
         candidate.dns_upstreams = predefined_params.dns.clone();
-        candidate
+        (candidate, None)
     } else {
-        build_endpoint_manually(template, &predefined_params)
+        (build_endpoint_manually(template, &predefined_params), None)
     };
 
-    if deeplink_uri.is_none() {
-        if x.certificate.is_some() {
-            parse_cert(x.certificate.clone().unwrap())
-                .expect("Couldn't parse provided certificate");
-        }
-
-        if endpoint_config.is_none() && subscription_url.is_none() {
-            x.skip_verification = x.certificate.is_none()
-                && ask_for_agreement_with_default(
-                    &format!("{}\n", Endpoint::doc_skip_verification()),
-                    opt_field!(template, skip_verification)
-                        .cloned()
-                        .unwrap_or_default(),
-                );
-        }
-    }
-
+    // Fetch the subscription before the configuration is presented to the
+    // user, so the confirmation shows the live parameters. A failed fetch is
+    // fatal for a subscription-only import; when the import source also
+    // carried complete static parameters, warn and keep them.
     if x.subscription.is_some() {
         match subscription::fetch_and_apply(&mut x) {
             Ok(()) => {
@@ -185,6 +175,27 @@ fn build_endpoint(template: Option<&Endpoint>) -> Endpoint {
                 eprintln!("Could not fetch the subscription: {error}");
                 std::process::exit(1);
             }
+        }
+    }
+
+    if let Some(cert_infos) = deeplink_cert_infos {
+        // Confirm only after the subscription fetch, so the user reviews the
+        // live parameters rather than the deep-link's static fallback.
+        display_and_confirm_endpoint(&x, &cert_infos);
+    } else {
+        if x.certificate.is_some() {
+            parse_cert(x.certificate.clone().unwrap())
+                .expect("Couldn't parse provided certificate");
+        }
+
+        if endpoint_config.is_none() && subscription_url.is_none() {
+            x.skip_verification = x.certificate.is_none()
+                && ask_for_agreement_with_default(
+                    &format!("{}\n", Endpoint::doc_skip_verification()),
+                    opt_field!(template, skip_verification)
+                        .cloned()
+                        .unwrap_or_default(),
+                );
         }
     }
 
@@ -694,7 +705,11 @@ fn display_and_confirm_endpoint(endpoint: &Endpoint, cert_infos: &[CertInfo]) {
     }
 }
 
-pub fn endpoint_from_deeplink(uri: &str) -> Endpoint {
+/// Decode and validate the deep-link. Return the endpoint it describes and
+/// the verified certificate info for the confirmation summary; the summary
+/// itself is shown by the caller once any subscription fetch has overlaid
+/// the live parameters.
+pub fn endpoint_from_deeplink(uri: &str) -> (Endpoint, Vec<CertInfo>) {
     let config = trusttunnel_deeplink::decode(uri)
         .unwrap_or_else(|e| panic!("Failed to decode deep-link URI: {}", e));
 
@@ -707,9 +722,7 @@ pub fn endpoint_from_deeplink(uri: &str) -> Endpoint {
     let endpoint = trusttunnel_settings::endpoint_from_deeplink_config(config)
         .unwrap_or_else(|e| panic!("Failed to convert deep-link config: {}", e));
 
-    display_and_confirm_endpoint(&endpoint, &cert_infos);
-
-    endpoint
+    (endpoint, cert_infos)
 }
 
 #[cfg(test)]
