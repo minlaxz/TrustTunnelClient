@@ -1,4 +1,5 @@
 use std::io::Read;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,20 +15,40 @@ pub struct HttpRequest<'a> {
     pub url: &'a str,
     pub pinned_certificate_pem: Option<&'a str>,
     pub skip_verification: bool,
+    /// Fixed `host:port` to connect to instead of resolving the URL's host.
+    /// The TLS SNI and the HTTP Host header still carry the URL host.
+    pub connect_address: Option<&'a str>,
 }
 
 impl<'a> HttpRequest<'a> {
-    /// Build a request for fetching `url` on behalf of `endpoint`. The
-    /// pinned certificate is only sent to the endpoint's own host.
+    /// Build a request for fetching `url` on behalf of `endpoint`.
+    ///
+    /// Pins the certificate and forces DNS resolution to the first address of the endpoint
+    /// if the certificate is set for the endpoint to allow secure request to a subscription URL
+    /// host with self-signed certificate and non-resolvable domain (the same logic as for tunnel connection)
     pub fn for_endpoint(url: &'a str, endpoint: &'a trusttunnel_settings::Endpoint) -> Self {
+        let certificate = endpoint
+            .certificate
+            .as_deref()
+            .filter(|certificate| !certificate.is_empty());
+        let host_matches = url::Url::parse(url)
+            .ok()
+            .and_then(|parsed| {
+                parsed
+                    .host_str()
+                    .map(|host| host.eq_ignore_ascii_case(&endpoint.hostname))
+            })
+            .unwrap_or(false);
+        let reuse_endpoint = host_matches && (certificate.is_some() || endpoint.skip_verification);
         HttpRequest {
             url,
-            pinned_certificate_pem: pinned_certificate(
-                url,
-                Some(&endpoint.hostname),
-                endpoint.certificate.as_deref(),
-            ),
-            skip_verification: endpoint.skip_verification,
+            pinned_certificate_pem: if reuse_endpoint { certificate } else { None },
+            skip_verification: reuse_endpoint && endpoint.skip_verification,
+            connect_address: if reuse_endpoint {
+                endpoint.addresses.first().map(String::as_str)
+            } else {
+                None
+            },
         }
     }
 }
@@ -132,6 +153,7 @@ pub fn fetch_subscription_json(
         url,
         pinned_certificate_pem: pinned_certificate(url, certificate_host, certificate),
         skip_verification,
+        connect_address: None,
     };
     let body = fetch_body(&request, transport)?;
     SubscriptionResponse::from_json(&body)?;
@@ -139,9 +161,9 @@ pub fn fetch_subscription_json(
 }
 
 /// Fetch the subscription document for the endpoint described by the config
-/// text and return the raw validated body. The subscription URL, the
-/// certificate pin and the verification policy are read from the endpoint
-/// section of the config.
+/// text and return the raw validated body. The subscription URL and the TLS
+/// parameters reuse policy are read from the endpoint section of the config
+/// (see [`HttpRequest::for_endpoint`]).
 pub fn fetch_for_config(
     config_text: &str,
     transport: &dyn HttpTransport,
@@ -154,13 +176,10 @@ pub fn fetch_for_config(
         .as_ref()
         .filter(|subscription| !subscription.url.is_empty())
         .ok_or(SubscriptionError::NoSubscription)?;
-    fetch_subscription_json(
-        &subscription.url,
-        Some(&settings.endpoint.hostname),
-        settings.endpoint.certificate.as_deref(),
-        settings.endpoint.skip_verification,
-        transport,
-    )
+    let request = HttpRequest::for_endpoint(&subscription.url, &settings.endpoint);
+    let body = fetch_body(&request, transport)?;
+    SubscriptionResponse::from_json(&body)?;
+    Ok(body)
 }
 
 struct PreparedRequest {
@@ -244,6 +263,48 @@ fn status_error(code: u16) -> HttpError {
     HttpError::HttpStatus(code)
 }
 
+/// Answer the subscription URL's netloc with the endpoint's fixed address,
+/// never touching DNS for it; resolve any other netloc (e.g. a redirect
+/// target) via the system DNS.
+struct PinnedAddressResolver {
+    /// Netloc (`host:port`) of the subscription URL.
+    netloc: String,
+    /// Socket addresses the endpoint's first address resolved to.
+    addresses: Vec<SocketAddr>,
+}
+
+impl PinnedAddressResolver {
+    fn new(url: &str, connect_address: &str) -> Result<Self, HttpError> {
+        let parsed = validate_url(url)?;
+        let host = parsed.host_str().ok_or(HttpError::BadUrl)?;
+        let port = parsed.port_or_known_default().ok_or(HttpError::BadUrl)?;
+        // `ToSocketAddrs` accepts both `ip:port` and `hostname:port` — the
+        // endpoint's own address may legitimately be a hostname.
+        let addresses: Vec<SocketAddr> = connect_address
+            .to_socket_addrs()
+            .map_err(|e| HttpError::Transport(format!("endpoint address is unusable: {e}")))?
+            .collect();
+        if addresses.is_empty() {
+            return Err(HttpError::Transport(
+                "endpoint address is unusable".to_string(),
+            ));
+        }
+        Ok(Self {
+            netloc: format!("{host}:{port}"),
+            addresses,
+        })
+    }
+}
+
+impl ureq::Resolver for PinnedAddressResolver {
+    fn resolve(&self, netloc: &str) -> std::io::Result<Vec<SocketAddr>> {
+        if netloc.eq_ignore_ascii_case(&self.netloc) {
+            return Ok(self.addresses.clone());
+        }
+        ToSocketAddrs::to_socket_addrs(netloc).map(|iter| iter.collect())
+    }
+}
+
 fn parse_pem_certificates(pem: &str) -> Vec<rustls::Certificate> {
     rustls_pemfile::certs(&mut pem.as_bytes())
         .map(|certs| certs.into_iter().map(rustls::Certificate).collect())
@@ -306,11 +367,14 @@ impl UreqTransport {
 
 impl HttpTransport for UreqTransport {
     fn get(&self, request: &HttpRequest) -> Result<Vec<u8>, HttpError> {
-        let agent = ureq::AgentBuilder::new()
+        let mut builder = ureq::AgentBuilder::new()
             .timeout(OPERATION_TIMEOUT)
             .redirects(0)
-            .tls_config(Arc::new(Self::build_tls_config(request)))
-            .build();
+            .tls_config(Arc::new(Self::build_tls_config(request)));
+        if let Some(connect_address) = request.connect_address {
+            builder = builder.resolver(PinnedAddressResolver::new(request.url, connect_address)?);
+        }
+        let agent = builder.build();
         let mut prepared = prepare_request(request.url)?;
         for _ in 0..=MAX_REDIRECTS {
             let response = Self::fetch_once(&agent, &prepared)?;
@@ -543,6 +607,7 @@ url = "https://u:p@vpn.example.com/subscription"
         url: String,
         pinned_certificate_pem: Option<String>,
         skip_verification: bool,
+        connect_address: Option<String>,
     }
 
     struct RecordingTransport(std::cell::RefCell<Option<SeenRequest>>);
@@ -553,6 +618,7 @@ url = "https://u:p@vpn.example.com/subscription"
                 url: request.url.to_string(),
                 pinned_certificate_pem: request.pinned_certificate_pem.map(str::to_string),
                 skip_verification: request.skip_verification,
+                connect_address: request.connect_address.map(str::to_string),
             });
             Ok(valid_body())
         }
@@ -571,6 +637,7 @@ url = "https://u:p@vpn.example.com/subscription"
             Some("-----BEGIN CERTIFICATE-----\nPIN\n-----END CERTIFICATE-----\n")
         );
         assert!(seen.skip_verification);
+        assert_eq!(seen.connect_address.as_deref(), Some("1.1.1.1:443"));
     }
 
     #[test]
@@ -582,7 +649,133 @@ url = "https://u:p@vpn.example.com/subscription"
         let transport = RecordingTransport(std::cell::RefCell::new(None));
         fetch_for_config(&config, &transport).unwrap();
         let seen = transport.0.borrow();
-        assert_eq!(seen.as_ref().unwrap().pinned_certificate_pem, None);
+        let seen = seen.as_ref().unwrap();
+        assert_eq!(seen.pinned_certificate_pem, None);
+        assert_eq!(seen.connect_address, None);
+        // The endpoint's verification policy must not leak to a foreign host.
+        assert!(!seen.skip_verification);
+    }
+
+    fn endpoint() -> trusttunnel_settings::Endpoint {
+        trusttunnel_settings::Endpoint {
+            hostname: "vpn.example.com".to_string(),
+            addresses: vec!["1.1.1.1:443".to_string()],
+            username: "alice".to_string(),
+            password: "old".to_string(),
+            certificate: Some(
+                "-----BEGIN CERTIFICATE-----\nPIN\n-----END CERTIFICATE-----\n".to_string(),
+            ),
+            ..trusttunnel_settings::Endpoint::default()
+        }
+    }
+
+    #[test]
+    fn request_reuses_endpoint_tls_params_when_host_matches_and_cert_pinned() {
+        let endpoint = endpoint();
+        let request = HttpRequest::for_endpoint("https://vpn.example.com/s", &endpoint);
+        assert_eq!(
+            request.pinned_certificate_pem,
+            Some("-----BEGIN CERTIFICATE-----\nPIN\n-----END CERTIFICATE-----\n")
+        );
+        assert_eq!(request.connect_address, Some("1.1.1.1:443"));
+        assert!(!request.skip_verification);
+    }
+
+    #[test]
+    fn request_reuse_honors_skip_verification() {
+        let mut endpoint = endpoint();
+        endpoint.skip_verification = true;
+        let request = HttpRequest::for_endpoint("https://vpn.example.com/s", &endpoint);
+        assert_eq!(request.connect_address, Some("1.1.1.1:443"));
+        assert!(request.skip_verification);
+    }
+
+    #[test]
+    fn request_reuses_endpoint_params_for_skip_verification_without_cert() {
+        let mut endpoint = endpoint();
+        endpoint.certificate = None;
+        endpoint.skip_verification = true;
+        let request = HttpRequest::for_endpoint("https://vpn.example.com/s", &endpoint);
+        assert_eq!(request.connect_address, Some("1.1.1.1:443"));
+        assert!(request.skip_verification);
+        assert_eq!(request.pinned_certificate_pem, None);
+    }
+
+    #[test]
+    fn request_drops_endpoint_tls_params_when_host_differs() {
+        let mut endpoint = endpoint();
+        endpoint.skip_verification = true;
+        let request = HttpRequest::for_endpoint("https://other.example.net/s", &endpoint);
+        assert_eq!(request.pinned_certificate_pem, None);
+        assert_eq!(request.connect_address, None);
+        assert!(!request.skip_verification);
+    }
+
+    #[test]
+    fn request_matches_host_case_insensitively() {
+        let endpoint = endpoint();
+        let request = HttpRequest::for_endpoint("https://VPN.example.COM/s", &endpoint);
+        assert_eq!(request.connect_address, Some("1.1.1.1:443"));
+    }
+
+    #[test]
+    fn request_makes_general_request_for_a_bare_subscription() {
+        let endpoint = trusttunnel_settings::Endpoint::default();
+        let request = HttpRequest::for_endpoint("https://vpn.example.com/s", &endpoint);
+        assert_eq!(request.pinned_certificate_pem, None);
+        assert_eq!(request.connect_address, None);
+        assert!(!request.skip_verification);
+    }
+
+    #[test]
+    fn request_treats_empty_certificate_as_absent() {
+        let mut endpoint = endpoint();
+        endpoint.certificate = Some(String::new());
+        let request = HttpRequest::for_endpoint("https://vpn.example.com/s", &endpoint);
+        assert_eq!(request.pinned_certificate_pem, None);
+        assert_eq!(request.connect_address, None);
+    }
+
+    #[test]
+    fn request_without_cert_and_without_skip_does_not_pin_the_address() {
+        let mut endpoint = endpoint();
+        endpoint.certificate = None;
+        let request = HttpRequest::for_endpoint("https://vpn.example.com/s", &endpoint);
+        assert_eq!(request.pinned_certificate_pem, None);
+        assert_eq!(request.connect_address, None);
+    }
+
+    #[test]
+    fn resolver_answers_the_subscription_netloc_without_dns() {
+        // The unresolvable hostname proves no DNS lookup is attempted.
+        let resolver =
+            PinnedAddressResolver::new("https://unresolvable.invalid/s", "127.0.0.1:8443").unwrap();
+        let addresses = ureq::Resolver::resolve(&resolver, "unresolvable.invalid:443").unwrap();
+        assert_eq!(addresses, vec!["127.0.0.1:8443".parse().unwrap()]);
+    }
+
+    #[test]
+    fn resolver_honors_the_url_port() {
+        let resolver =
+            PinnedAddressResolver::new("https://unresolvable.invalid:444/s", "127.0.0.1:8443")
+                .unwrap();
+        let addresses = ureq::Resolver::resolve(&resolver, "unresolvable.invalid:444").unwrap();
+        assert_eq!(addresses, vec!["127.0.0.1:8443".parse().unwrap()]);
+        // A different port on the same host falls back to DNS.
+        assert!(ureq::Resolver::resolve(&resolver, "unresolvable.invalid:443").is_err());
+    }
+
+    #[test]
+    fn resolver_falls_back_to_dns_for_other_netlocs() {
+        let resolver =
+            PinnedAddressResolver::new("https://unresolvable.invalid/s", "127.0.0.1:8443").unwrap();
+        let addresses = ureq::Resolver::resolve(&resolver, "localhost:443").unwrap();
+        assert!(!addresses.is_empty());
+    }
+
+    #[test]
+    fn resolver_rejects_an_unusable_connect_address() {
+        assert!(PinnedAddressResolver::new("https://h/s", "not-an-address").is_err());
     }
 
     #[test]
