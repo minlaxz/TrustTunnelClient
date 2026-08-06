@@ -1,6 +1,7 @@
 #include "vpn/trusttunnel/subscription_refresh.h"
 
 #include <cerrno>
+#include <common/logger.h>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -14,6 +15,8 @@
 #include "vpn/platform.h"
 
 namespace ag {
+
+Logger g_logger("SUBSCRIPTION_REFRESH");
 
 using FfiString = std::unique_ptr<char, decltype(&trusttunnel_subscription_string_free)>;
 
@@ -43,7 +46,7 @@ static std::wstring widen_path(std::string_view path) {
  * Read the whole file at `path`. On failure return an empty optional and
  * set `detail` to the OS error message.
  */
-static std::optional<std::string> read_text_file(const std::string &path, std::string &detail) {
+static std::optional<std::string> read_text_file(const std::string &path) {
     errno = 0;
 #ifdef _WIN32
     std::wstring wide_path = widen_path(path);
@@ -60,7 +63,7 @@ static std::optional<std::string> read_text_file(const std::string &path, std::s
         content << stream.rdbuf();
     }
     if (!stream) {
-        detail = std::strerror(errno);
+        errlog(g_logger, "Failed to read file '{}': {}", path, std::strerror(errno));
         return std::nullopt;
     }
     return content.str();
@@ -71,15 +74,14 @@ static std::optional<std::string> read_text_file(const std::string &path, std::s
  */
 static void print_and_free_error(SubscriptionFfiError *error) {
     const char *message = (error != nullptr) ? trusttunnel_subscription_error_message(error) : "unknown error";
-    std::fprintf(stderr, "Refresh failed: %s\n", message);
+    errlog(g_logger, "Refresh failed: {}", message);
     trusttunnel_subscription_error_free(error);
 }
 
 int run_subscription_refresh(const std::string &config_path) {
-    std::string detail;
-    std::optional<std::string> config_text = read_text_file(config_path, detail);
+    std::optional<std::string> config_text = read_text_file(config_path);
     if (!config_text) {
-        std::fprintf(stderr, "Refresh failed: Cannot read config file '%s': %s\n", config_path.c_str(), detail.c_str());
+        errlog(g_logger, "Refresh failed: Cannot read config file '{}'", config_path);
         return 1;
     }
 
@@ -103,7 +105,7 @@ int run_subscription_refresh(const std::string &config_path) {
         return 1;
     }
 
-    std::fprintf(stderr, "Configuration refreshed from the subscription URL\n");
+    infolog(g_logger, "Configuration refreshed from the subscription URL");
     return 0;
 }
 
