@@ -638,7 +638,7 @@ impl fmt::Display for EndpointSummary<'_> {
   Certificate:       {}
   Protocol:          {}
   Anti-DPI:          {}
-  DNS upstreams:       {}",
+  DNS upstreams:     {}",
             ep.hostname,
             addresses,
             custom_sni,
