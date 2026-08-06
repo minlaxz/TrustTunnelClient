@@ -178,11 +178,7 @@ fn build_endpoint(template: Option<&Endpoint>) -> Endpoint {
         }
     }
 
-    if let Some(cert_infos) = deeplink_cert_infos {
-        // Confirm only after the subscription fetch, so the user reviews the
-        // live parameters rather than the deep-link's static fallback.
-        display_and_confirm_endpoint(&x, &cert_infos);
-    } else {
+    if deeplink_cert_infos.is_none() {
         if x.certificate.is_some() {
             parse_cert(x.certificate.clone().unwrap())
                 .expect("Couldn't parse provided certificate");
@@ -198,6 +194,8 @@ fn build_endpoint(template: Option<&Endpoint>) -> Endpoint {
                 );
         }
     }
+
+    display_and_confirm_endpoint(&x, deeplink_cert_infos.as_deref().unwrap_or_default());
 
     x
 }
@@ -700,7 +698,7 @@ fn display_and_confirm_endpoint(endpoint: &Endpoint, cert_infos: &[CertInfo]) {
     if crate::get_mode() == Mode::Interactive
         && !ask_for_agreement_with_default("Accept this configuration?", false)
     {
-        eprintln!("Deep-link configuration declined by user.");
+        eprintln!("Endpoint configuration declined by user.");
         std::process::exit(1);
     }
 }
