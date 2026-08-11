@@ -41,7 +41,6 @@ ag::VpnError ag::VpnMacTunnel::init(const ag::VpnOsTunnelSettings *settings) {
         return {-1, "Failed to init tunnel"};
     }
     setup_if();
-    mark_tunnel_active();
     setup_dns();
     if (!setup_routes()) {
         return {-1, "Unable to setup routes for mactun session"};
@@ -53,7 +52,6 @@ ag::VpnError ag::VpnMacTunnel::init(const ag::VpnOsTunnelSettings *settings) {
 void ag::VpnMacTunnel::deinit() {
     close(m_tun_fd);
     m_system_dns_setup_success = false;
-    clear_tunnel_active();
 }
 
 std::string ag::VpnMacTunnel::get_name() {
