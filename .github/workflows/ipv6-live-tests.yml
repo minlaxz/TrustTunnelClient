@@ -4,17 +4,12 @@ on:
   pull_request:
 
 jobs:
-  resolve-images:
-    if: github.repository == 'AdGuardSoftwareLimited/trusttunnel-client'
-    uses: AdGuardSoftwareLimited/native-libs-common/.github/workflows/resolve-images.yml@master
-
   build-binaries:
     name: Build binaries
-    needs: [resolve-images]
     runs-on:
       - ephemeral
       - ephemeral-linux
-      - ${{ needs.resolve-images.outputs.corelibs-builder }}
+      - registry.int.agrd.dev/linux/corelibs-builder:20260819-1407
       - ephemeral-limit-memory-8192
       - ephemeral-limit-cpu-6
       - ephemeral-run-id-${{ github.run_id }}
@@ -59,11 +54,10 @@ jobs:
 
   probe-container:
     name: Probe IPv6 in the live-test container
-    needs: [resolve-images]
     runs-on:
       - ephemeral
       - ephemeral-linux
-      - ${{ needs.resolve-images.outputs.corelibs-builder }}
+      - registry.int.agrd.dev/linux/corelibs-builder:20260819-1407
       - ephemeral-limit-memory-8192
       - ephemeral-limit-cpu-6
       - ephemeral-run-id-${{ github.run_id }}
@@ -99,11 +93,10 @@ jobs:
 
   probe-host:
     name: Probe host IPv6 setup
-    needs: [resolve-images]
     runs-on:
       - ephemeral
       - ephemeral-linux
-      - ${{ needs.resolve-images.outputs.corelibs-builder }}
+      - registry.int.agrd.dev/linux/corelibs-builder:20260819-1407
       - ephemeral-limit-memory-8192
       - ephemeral-limit-cpu-6
       - ephemeral-run-id-${{ github.run_id }}
@@ -137,11 +130,11 @@ jobs:
 
   run-tests:
     name: Run live integration tests (${{ matrix.transport }} ${{ matrix.mode }})
-    needs: [build-binaries, resolve-images]
+    needs: [build-binaries]
     runs-on:
       - ephemeral
       - ephemeral-linux
-      - ${{ needs.resolve-images.outputs.corelibs-builder }}
+      - registry.int.agrd.dev/linux/corelibs-builder:20260819-1407
       - ephemeral-limit-memory-8192
       - ephemeral-limit-cpu-6
       - ephemeral-run-id-${{ github.run_id }}
