@@ -249,6 +249,10 @@ bool vpn_endpoint_equals(const VpnEndpoint *lh, const VpnEndpoint *rh) {
     return SocketAddress(lh->address) == SocketAddress(rh->address)
             && ((lh->name == nullptr && rh->name == lh->name) || 0 == strcmp(lh->name, rh->name))
             && ((lh->remote_id == nullptr && rh->remote_id == nullptr) || 0 == strcmp(lh->remote_id, rh->remote_id))
+            && array_of_equals(lh->tls_client_random.data, lh->tls_client_random.size, rh->tls_client_random.data,
+                    rh->tls_client_random.size)
+            && array_of_equals(lh->tls_client_random_mask.data, lh->tls_client_random_mask.size,
+                    rh->tls_client_random_mask.data, rh->tls_client_random_mask.size)
             && array_of_equals(lh->tls_client_random_psk_key.data, lh->tls_client_random_psk_key.size,
                     rh->tls_client_random_psk_key.data, rh->tls_client_random_psk_key.size);
 }

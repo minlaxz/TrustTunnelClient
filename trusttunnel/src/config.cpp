@@ -146,7 +146,24 @@ static std::optional<TrustTunnelConfig::Location> build_endpoint(const toml::tab
                 errlog(g_logger, "Invalid client_random format: mask can't be empty");
                 return std::nullopt;
             }
+            // Validate hex for both prefix and mask parts
+            for (const auto &part : {location.client_random, location.client_random_mask}) {
+                if (!part.empty() && (part.size() % 2 != 0 || !std::ranges::all_of(part, [](unsigned char c) {
+                        return std::isxdigit(c) != 0;
+                    }))) {
+                    errlog(g_logger, "Invalid client_random format: not valid hex");
+                    return std::nullopt;
+                }
+            }
         } else {
+            // Format: just prefix
+            if (!client_random->empty()
+                    && (client_random->size() % 2 != 0 || !std::ranges::all_of(*client_random, [](unsigned char c) {
+                           return std::isxdigit(c) != 0;
+                       }))) {
+                errlog(g_logger, "Invalid client_random format: not valid hex");
+                return std::nullopt;
+            }
             location.client_random = *client_random;
         }
     }

@@ -190,8 +190,8 @@ mod tests {
         );
         assert!(toml_str.contains("alice"), "Output must contain username");
         assert!(
-            toml_str.contains("aabb"),
-            "Output must contain client_random"
+            toml_str.contains("client_random = \"aabb\""),
+            "Output must contain client_random prefix field with value"
         );
         assert!(
             toml_str.contains("client_random_psk_key"),
