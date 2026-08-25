@@ -1,0 +1,205 @@
+name: IPv6 live tests probe
+
+on:
+  pull_request:
+
+jobs:
+  resolve-images:
+    if: github.repository == 'AdGuardSoftwareLimited/trusttunnel-client'
+    uses: AdGuardSoftwareLimited/native-libs-common/.github/workflows/resolve-images.yml@master
+
+  build-binaries:
+    name: Build binaries
+    needs: [resolve-images]
+    runs-on:
+      - ephemeral
+      - ephemeral-linux
+      - ${{ needs.resolve-images.outputs.corelibs-builder }}
+      - ephemeral-limit-memory-8192
+      - ephemeral-limit-cpu-6
+      - ephemeral-run-id-${{ github.run_id }}
+    container:
+      image: adguard/core-libs:2.11
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@v6
+        with:
+          path: vpn-libs
+
+      - name: Checkout endpoint
+        uses: actions/checkout@v6
+        with:
+          repository: TrustTunnel/TrustTunnel
+          path: vpn-libs-endpoint
+
+      - name: Build client and endpoint
+        env:
+          CONAN_REPO_URL: ${{ vars.CONAN_REPO_URL }}
+        run: |
+          set -x -e
+
+          mkdir -p output
+          export OUTPUT_DIR=${PWD}/output
+          export SOURCE_DIR=${PWD}
+
+          vpn-libs/integration-tests/build_client.sh
+          vpn-libs/integration-tests/build_endpoint.sh
+
+      - name: Upload client binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: trusttunnel_client
+          path: output/trusttunnel_client
+
+      - name: Upload endpoint binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: trusttunnel_endpoint
+          path: output/trusttunnel_endpoint
+
+  probe-container:
+    name: Probe IPv6 in the live-test container
+    needs: [resolve-images]
+    runs-on:
+      - ephemeral
+      - ephemeral-linux
+      - ${{ needs.resolve-images.outputs.corelibs-builder }}
+      - ephemeral-limit-memory-8192
+      - ephemeral-limit-cpu-6
+      - ephemeral-run-id-${{ github.run_id }}
+    container:
+      image: adguard/core-libs-testing:2.11.0
+      options: --privileged
+    steps:
+      - name: Probe direct IPv6 (no VPN)
+        run: |
+          set -u
+          rc=0
+
+          echo "=== kernel IPv6 ==="
+          cat /proc/net/if_inet6 2>/dev/null || echo "(no /proc/net/if_inet6)"
+
+          echo "=== ip -6 addr eth0 ==="
+          ip -6 addr show eth0 2>&1 || true
+
+          echo "=== ip -6 route ==="
+          ip -6 route show 2>&1 || true
+
+          echo "=== direct v6 connectivity ==="
+          if curl -6 -sS --max-time 15 -o /dev/null -w 'ipv6.google.com -> HTTP %{http_code}\n' https://ipv6.google.com; then
+            echo "PASS: direct IPv6 works"
+          else
+            echo "FAIL: direct IPv6 does not work"
+            rc=1
+          fi
+          curl -6 -sS --max-time 15 -o /dev/null -w '2606:4700:4700::1111 -> HTTP %{http_code}\n' http://[2606:4700:4700::1111]/ || echo "FAIL: 2606:4700:4700::1111 unreachable"
+          curl -4 -sS --max-time 15 -o /dev/null -w '1.1.1.1 (v4 control) -> HTTP %{http_code}\n' http://1.1.1.1/ || echo "FAIL: v4 control failed too"
+
+          exit $rc
+
+  probe-host:
+    name: Probe host IPv6 setup
+    needs: [resolve-images]
+    runs-on:
+      - ephemeral
+      - ephemeral-linux
+      - ${{ needs.resolve-images.outputs.corelibs-builder }}
+      - ephemeral-limit-memory-8192
+      - ephemeral-limit-cpu-6
+      - ephemeral-run-id-${{ github.run_id }}
+    steps:
+      - name: Dump host-side IPv6 config
+        run: |
+          set +e
+
+          echo "=== /etc/docker/daemon.json ==="
+          cat /etc/docker/daemon.json 2>/dev/null || echo "(none)"
+
+          echo "=== sysctls ==="
+          sysctl net.ipv6.conf.all.forwarding net.ipv6.conf.all.accept_ra 2>/dev/null
+
+          echo "=== ip6tables -t nat -S POSTROUTING ==="
+          ip6tables -t nat -S POSTROUTING 2>&1 || echo "(ip6tables unavailable)"
+
+          echo "=== ip6tables -S FORWARD (head) ==="
+          ip6tables -S FORWARD 2>&1 | head -30 || true
+
+          echo "=== nft ip6 snat/masquerade ==="
+          nft list ruleset ip6 2>/dev/null | grep -iE 'snat|masquerade|fc00|fd[0-9a-f]{2}' | head -30 || echo "(nft unavailable)"
+
+          echo "=== docker binary / shim ==="
+          which -a docker
+          for d in $(which -a docker 2>/dev/null); do file "$d"; done
+          ls -la /usr/local/bin/ 2>/dev/null | grep -i docker || true
+
+          echo "=== host direct v6 ==="
+          curl -6 -sS --max-time 15 -o /dev/null -w 'host v6 -> HTTP %{http_code}\n' https://ipv6.google.com || echo "FAIL: host v6 unreachable"
+
+  run-tests:
+    name: Run live integration tests (${{ matrix.transport }} ${{ matrix.mode }})
+    needs: [build-binaries, resolve-images]
+    runs-on:
+      - ephemeral
+      - ephemeral-linux
+      - ${{ needs.resolve-images.outputs.corelibs-builder }}
+      - ephemeral-limit-memory-8192
+      - ephemeral-limit-cpu-6
+      - ephemeral-run-id-${{ github.run_id }}
+    container:
+      image: adguard/core-libs-testing:2.11.0
+      options: --privileged
+    strategy:
+      fail-fast: false
+      matrix:
+        transport: [http2, http3]
+        mode: [socks, tun]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download binaries
+        uses: actions/download-artifact@v8
+        with:
+          path: download
+
+      - name: Prepare binaries
+        run: |
+          mkdir -p output
+          mv download/trusttunnel_client/trusttunnel_client output/
+          mv download/trusttunnel_endpoint/trusttunnel_endpoint output/
+          chmod +x output/trusttunnel_client output/trusttunnel_endpoint
+          rm -rf download
+
+      - name: Probe direct IPv6 in this container
+        run: |
+          set +e
+          echo "=== ip -6 addr eth0 ==="
+          ip -6 addr show eth0 2>&1 || true
+          echo "=== ip -6 route ==="
+          ip -6 route show 2>&1 || true
+          echo "=== direct v6 ==="
+          curl -6 -sS --max-time 15 -o /dev/null -w 'ipv6.google.com -> HTTP %{http_code}\n' https://ipv6.google.com || echo "FAIL: direct v6 unreachable"
+
+      - name: Run tests (${{ matrix.transport }} ${{ matrix.mode }})
+        env:
+          OUTPUT_DIR: ${{ github.workspace }}/output
+          TEST_DIR: ${{ github.workspace }}/integration-tests/tests
+          LIVE_TESTS: 1
+          LOG_LEVEL: trace
+        run: |
+          set -x -e
+
+          # Nameserver with global routable IP is required here.
+          # 94.140.14.140 is AdGuard Unfiltered DNS
+          echo nameserver 94.140.14.140 > /etc/resolv.conf
+
+          ${TEST_DIR}/main/run.sh ${{ matrix.transport }} ${{ matrix.mode }}
+
+      - name: Upload logs
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: live-integration-test-logs-${{ matrix.transport }}-${{ matrix.mode }}
+          path: |
+            output/*.log
+            output/*.txt
