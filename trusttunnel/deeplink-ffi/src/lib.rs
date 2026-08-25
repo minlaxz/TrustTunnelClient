@@ -162,6 +162,7 @@ mod tests {
             username: "alice".to_string(),
             password: "s3cr3t".to_string(),
             client_random_prefix: Some("aabb".to_string()),
+            client_random_psk_key: Some("aabbccdd".to_string()),
             custom_sni: None,
             has_ipv6: true,
             skip_verification: false,

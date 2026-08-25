@@ -252,6 +252,9 @@ Error<TrustTunnelClient::ConnectResultError> TrustTunnelClient::connect_to_serve
             if (!m_config.location.client_random_mask.empty()) {
                 copy_to_c_buffer(relay.tls_client_random_mask, m_config.location.client_random_mask);
             }
+            if (!m_config.location.client_random_psk_key.empty()) {
+                copy_to_c_buffer(relay.tls_client_random_psk_key, m_config.location.client_random_psk_key);
+            }
             continue;
         }
         for (const auto &addr : resolved) {
@@ -266,6 +269,9 @@ Error<TrustTunnelClient::ConnectResultError> TrustTunnelClient::connect_to_serve
             }
             if (!m_config.location.client_random_mask.empty()) {
                 copy_to_c_buffer(last_el.tls_client_random_mask, m_config.location.client_random_mask);
+            }
+            if (!m_config.location.client_random_psk_key.empty()) {
+                copy_to_c_buffer(last_el.tls_client_random_psk_key, m_config.location.client_random_psk_key);
             }
         }
     }

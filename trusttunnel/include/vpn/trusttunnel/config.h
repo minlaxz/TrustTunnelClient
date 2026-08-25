@@ -28,6 +28,7 @@ struct TrustTunnelConfig {
         ag::VpnUpstreamProtocol upstream_protocol = ag::VPN_UP_HTTP2;
         std::string client_random;
         std::string client_random_mask;
+        std::string client_random_psk_key;
         std::optional<std::vector<std::string>> dns_upstreams;
         bool skip_verification = false;
         bool anti_dpi = false;

@@ -4,10 +4,14 @@
 #include <cassert>
 #include <cctype>
 #include <chrono>
+#include <climits>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <openssl/aes.h>
+#include <openssl/hkdf.h>
 #include <openssl/rand.h>
+#include <openssl/sha.h>
 #include <set>
 #include <span>
 #include <tuple>
@@ -200,6 +204,16 @@ AutoVpnEndpoint vpn_endpoint_clone(const VpnEndpoint *src) {
         dst->tls_client_random_mask.size = 0;
     }
 
+    data_len = src->tls_client_random_psk_key.size;
+    if (data_len > 0 && src->tls_client_random_psk_key.data != nullptr) {
+        dst->tls_client_random_psk_key.data = static_cast<uint8_t *>(std::malloc(data_len));
+        std::memcpy(dst->tls_client_random_psk_key.data, src->tls_client_random_psk_key.data, data_len);
+        dst->tls_client_random_psk_key.size = data_len;
+    } else {
+        dst->tls_client_random_psk_key.data = nullptr;
+        dst->tls_client_random_psk_key.size = 0;
+    }
+
     return dst;
 }
 
@@ -213,6 +227,11 @@ void vpn_endpoint_destroy(VpnEndpoint *endpoint) {
     free(endpoint->additional_data.data);
     free(endpoint->tls_client_random.data);
     free(endpoint->tls_client_random_mask.data);
+    if (endpoint->tls_client_random_psk_key.data != nullptr) {
+        // The PSK key is a secret credential used for derivation, cleanse it before freeing
+        OPENSSL_cleanse(endpoint->tls_client_random_psk_key.data, endpoint->tls_client_random_psk_key.size);
+        free(endpoint->tls_client_random_psk_key.data);
+    }
     std::memset(endpoint, 0, sizeof(*endpoint));
 }
 
@@ -235,6 +254,13 @@ void vpn_relay_destroy(VpnRelay *relay) {
     free(relay->tls_client_random_mask.data);
     relay->tls_client_random_mask.data = nullptr;
     relay->tls_client_random_mask.size = 0;
+    if (relay->tls_client_random_psk_key.data != nullptr) {
+        // The PSK key is a secret credential used for derivation, cleanse it before freeing
+        OPENSSL_cleanse(relay->tls_client_random_psk_key.data, relay->tls_client_random_psk_key.size);
+        free(relay->tls_client_random_psk_key.data);
+        relay->tls_client_random_psk_key.data = nullptr;
+        relay->tls_client_random_psk_key.size = 0;
+    }
     std::memset(&relay->address, 0, sizeof(relay->address));
 }
 
@@ -271,6 +297,16 @@ AutoVpnRelay vpn_relay_clone(const VpnRelay *src) {
     } else {
         dst->tls_client_random_mask.data = nullptr;
         dst->tls_client_random_mask.size = 0;
+    }
+
+    data_len = src->tls_client_random_psk_key.size;
+    if (data_len > 0 && src->tls_client_random_psk_key.data != nullptr) {
+        dst->tls_client_random_psk_key.data = (uint8_t *) std::malloc(data_len);
+        std::memcpy(dst->tls_client_random_psk_key.data, src->tls_client_random_psk_key.data, data_len);
+        dst->tls_client_random_psk_key.size = data_len;
+    } else {
+        dst->tls_client_random_psk_key.data = nullptr;
+        dst->tls_client_random_psk_key.size = 0;
     }
 
     return dst;
@@ -915,9 +951,51 @@ std::string kex_group_name_by_nid(int kex_group_nid) {
     }
 }
 
+#ifdef SSL_set_custom_client_random
+std::optional<std::array<uint8_t, SSL3_RANDOM_SIZE>> derive_client_random_from_psk(U8View psk_key, const char *sni) {
+    constexpr size_t half = SSL3_RANDOM_SIZE / 2;
+    static constexpr std::string_view INFO = "tls13 encryption context";
+
+    if (sni == nullptr || sni[0] == '\0') {
+        return std::nullopt;
+    }
+
+    uint8_t random[half];
+    if (1 != RAND_bytes(random, half)) {
+        return std::nullopt;
+    }
+
+    uint8_t sni_hash[SHA256_DIGEST_LENGTH];
+    SHA256(reinterpret_cast<const uint8_t *>(sni), std::strlen(sni), sni_hash);
+
+    uint8_t derived_key[half];
+    if (1
+            != HKDF(derived_key, half, EVP_sha256(), psk_key.data(), psk_key.size(), random, half,
+                    reinterpret_cast<const uint8_t *>(INFO.data()), INFO.size())) {
+        return std::nullopt;
+    }
+
+    AES_KEY aes_key;
+    if (0 != AES_set_encrypt_key(derived_key, half * CHAR_BIT, &aes_key)) {
+        return std::nullopt;
+    }
+
+    uint8_t ciphertext[half];
+    AES_encrypt(sni_hash, ciphertext, &aes_key); // encrypts the first 16 bytes of sni_hash
+
+    std::array<uint8_t, SSL3_RANDOM_SIZE> result{};
+    std::copy_n(random, half, result.begin());
+    std::copy_n(ciphertext, half, result.begin() + half);
+
+    OPENSSL_cleanse(derived_key, half);
+    OPENSSL_cleanse(&aes_key, sizeof(aes_key));
+    return result;
+}
+#endif
+
 std::variant<SslPtr, std::string> make_ssl(int (*verification_callback)(X509_STORE_CTX *, void *), void *arg,
         U8View alpn_protos, const char *sni, MakeSslProtocolType type, U8View endpoint_data, U8View tls_client_random,
-        U8View tls_client_random_mask) {
+        U8View tls_client_random_mask, U8View tls_client_random_psk_key) {
     bool quic = type == MSPT_NGTCP2;
     DeclPtr<SSL_CTX, SSL_CTX_free> ctx{SSL_CTX_new(TLS_client_method())};
     if (verification_callback && arg) {
@@ -970,7 +1048,19 @@ std::variant<SslPtr, std::string> make_ssl(int (*verification_callback)(X509_STO
 #endif
 
 #ifdef SSL_set_custom_client_random
-    if (!tls_client_random.empty()) {
+    if (!tls_client_random_psk_key.empty()) {
+        if (!tls_client_random.empty()) {
+            warnlog(g_logger,
+                    "Both client_random and client_random_psk_key are set; "
+                    "PSK key takes priority, client_random will be ignored");
+        }
+        // PSK mode: derive the full 32-byte client_random from the PSK key and SNI
+        auto derived = derive_client_random_from_psk(tls_client_random_psk_key, sni);
+        if (!derived.has_value()) {
+            return "Failed to derive client_random from PSK key";
+        }
+        SSL_set_custom_client_random(ssl.get(), derived->data(), derived->size());
+    } else if (!tls_client_random.empty()) {
         std::vector<uint8_t> client_random_data(tls_client_random.size());
         std::vector<uint8_t> mask_data(client_random_data.size(), 0xff);
 
@@ -993,6 +1083,13 @@ std::variant<SslPtr, std::string> make_ssl(int (*verification_callback)(X509_STO
         }
 
         SSL_set_custom_client_random(ssl.get(), client_random_data.data(), client_random_data.size());
+    }
+#else
+    if (!tls_client_random_psk_key.empty()) {
+        warnlog(g_logger,
+                "TLS client_random PSK key is configured but "
+                "SSL_set_custom_client_random is unavailable on this build; "
+                "PSK authentication will not work");
     }
 #endif
 

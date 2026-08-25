@@ -13,6 +13,8 @@ pub struct Endpoint {
     #[serde(default)]
     pub client_random: String,
     #[serde(default)]
+    pub client_random_psk_key: String,
+    #[serde(default)]
     pub skip_verification: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub certificate: Option<String>,
@@ -75,6 +77,12 @@ impl Endpoint {
         "TLS client random prefix and mask (hex string, format: prefix[/mask])"
     }
 
+    pub fn doc_client_random_psk_key() -> &'static str {
+        "TLS client random PSK key (hex string). When set, the full 32-byte client_random \
+         is derived from this key and the SNI using HKDF-SHA256 + AES-128, \
+         matching the AdGuard VPN ag_secret algorithm"
+    }
+
     pub fn doc_skip_verification() -> &'static str {
         "Skip the endpoint certificate verification?\n\
          That is, any certificate is accepted with this one set to true."
@@ -127,6 +135,7 @@ pub fn endpoint_from_deeplink_config(config: DeepLinkConfig) -> Result<Endpoint,
         username: config.username,
         password: config.password,
         client_random: config.client_random_prefix.unwrap_or_default(),
+        client_random_psk_key: config.client_random_psk_key.unwrap_or_default(),
         skip_verification: config.skip_verification,
         certificate,
         upstream_protocol: config.upstream_protocol.to_string(),
@@ -150,6 +159,7 @@ mod tests {
             username: "alice".to_string(),
             password: "s3cr3t".to_string(),
             client_random_prefix: Some("aabb".to_string()),
+            client_random_psk_key: Some("aabbccdd".to_string()),
             custom_sni: Some("sni.example.com".to_string()),
             has_ipv6: false,
             skip_verification: true,
@@ -166,6 +176,7 @@ mod tests {
         assert_eq!(ep.username, "alice");
         assert_eq!(ep.password, "s3cr3t");
         assert_eq!(ep.client_random, "aabb");
+        assert_eq!(ep.client_random_psk_key, "aabbccdd");
         assert_eq!(ep.custom_sni, "sni.example.com");
         assert!(!ep.has_ipv6);
         assert!(ep.skip_verification);
@@ -184,6 +195,7 @@ mod tests {
             username: "u".to_string(),
             password: "p".to_string(),
             client_random_prefix: None,
+            client_random_psk_key: None,
             custom_sni: None,
             has_ipv6: true,
             skip_verification: false,
@@ -196,6 +208,7 @@ mod tests {
 
         let ep = endpoint_from_deeplink_config(config).unwrap();
         assert_eq!(ep.client_random, "");
+        assert_eq!(ep.client_random_psk_key, "");
         assert_eq!(ep.custom_sni, "");
         assert_eq!(ep.upstream_protocol, "http3");
         assert!(ep.anti_dpi);
@@ -211,6 +224,7 @@ mod tests {
             username: "alice".to_string(),
             password: "s3cr3t".to_string(),
             client_random_prefix: None,
+            client_random_psk_key: None,
             custom_sni: None,
             has_ipv6: true,
             skip_verification: false,
@@ -237,6 +251,7 @@ mod tests {
             username: "alice".to_string(),
             password: "s3cr3t".to_string(),
             client_random_prefix: None,
+            client_random_psk_key: None,
             custom_sni: None,
             has_ipv6: true,
             skip_verification: false,

@@ -121,6 +121,7 @@ The configuration file uses TOML format. Below are all available settings.
 | `username` | string | *required* | Authorization username |
 | `password` | string | *required* | Authorization password |
 | `client_random` | string | `""` | TLS client random prefix and mask (hex, format: `prefix[/mask]`) |
+| `client_random_psk_key` | string | `""` | TLS client random PSK key (hex). When set, the full 32-byte client_random is derived from this key and SNI via HKDF+AES, matching AdGuard VPN's `ag_secret` algorithm. Takes priority over `client_random`; only one should be set. Not available on MIPS builds (stock OpenSSL). |
 | `skip_verification` | bool | `false` | Skip endpoint certificate verification (accepts any cert) |
 | `certificate` | string | `null` | Endpoint certificate in PEM format (uses system store if empty) |
 | `upstream_protocol` | string | `"http2"` | Protocol: `http2` or `http3` |
@@ -197,6 +198,7 @@ has_ipv6 = true
 username = "myuser"
 password = "mypassword"
 client_random = ""
+client_random_psk_key = ""
 skip_verification = false
 certificate = ""
 dns_upstreams = ["tls://1.1.1.1"]
