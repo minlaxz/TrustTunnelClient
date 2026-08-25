@@ -273,6 +273,17 @@ std::variant<SslPtr, std::string> make_ssl(int (*verification_callback)(X509_STO
  * @return 32-byte client_random, or std::nullopt if derivation failed
  */
 std::optional<std::array<uint8_t, SSL3_RANDOM_SIZE>> derive_client_random_from_psk(ag::U8View psk_key, const char *sni);
+
+/**
+ * Deterministic variant of derive_client_random_from_psk that takes an explicit
+ * 16-byte salt instead of generating it randomly. Exposed for fixed-vector tests.
+ * @param psk_key PSK key bytes
+ * @param sni SNI host name (must be non-empty)
+ * @param salt exactly 16 salt bytes
+ * @return 32-byte client_random, or std::nullopt if derivation failed or salt is not 16 bytes
+ */
+std::optional<std::array<uint8_t, SSL3_RANDOM_SIZE>> derive_client_random_psk_with_salt(
+        ag::U8View psk_key, const char *sni, ag::U8View salt);
 #endif
 
 /**

@@ -1,3 +1,4 @@
+#include <cctype>
 #include <common/logger.h>
 #include <cstdio>
 #include <functional>
@@ -152,6 +153,12 @@ static std::optional<TrustTunnelConfig::Location> build_endpoint(const toml::tab
 
     // Parse TLS client random PSK key (hex string)
     if (auto psk_key = config["client_random_psk_key"].value<std::string>()) {
+        if (!psk_key->empty() && (psk_key->size() % 2 != 0 || !std::ranges::all_of(*psk_key, [](unsigned char c) {
+                return std::isxdigit(c) != 0;
+            }))) {
+            errlog(g_logger, "Invalid client_random_psk_key: not valid hex");
+            return std::nullopt;
+        }
         location.client_random_psk_key = *psk_key;
     }
 

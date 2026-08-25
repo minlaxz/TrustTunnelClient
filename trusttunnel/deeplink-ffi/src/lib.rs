@@ -194,6 +194,14 @@ mod tests {
             "Output must contain client_random"
         );
         assert!(
+            toml_str.contains("client_random_psk_key"),
+            "Output must contain client_random_psk_key field"
+        );
+        assert!(
+            toml_str.contains("aabbccdd"),
+            "Output must contain the PSK key value"
+        );
+        assert!(
             toml_str.contains("dns.adguard-dns.com"),
             "Output must contain dns_upstreams value"
         );

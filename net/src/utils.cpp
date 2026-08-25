@@ -235,10 +235,22 @@ void vpn_endpoint_destroy(VpnEndpoint *endpoint) {
     std::memset(endpoint, 0, sizeof(*endpoint));
 }
 
+static bool array_of_equals(const uint8_t *lh_data, uint32_t lh_size, const uint8_t *rh_data, uint32_t rh_size) {
+    if (lh_size != rh_size) {
+        return false;
+    }
+    if (lh_size == 0) {
+        return true;
+    }
+    return 0 == memcmp(lh_data, rh_data, lh_size);
+}
+
 bool vpn_endpoint_equals(const VpnEndpoint *lh, const VpnEndpoint *rh) {
     return SocketAddress(lh->address) == SocketAddress(rh->address)
             && ((lh->name == nullptr && rh->name == lh->name) || 0 == strcmp(lh->name, rh->name))
-            && ((lh->remote_id == nullptr && rh->remote_id == nullptr) || 0 == strcmp(lh->remote_id, rh->remote_id));
+            && ((lh->remote_id == nullptr && rh->remote_id == nullptr) || 0 == strcmp(lh->remote_id, rh->remote_id))
+            && array_of_equals(lh->tls_client_random_psk_key.data, lh->tls_client_random_psk_key.size,
+                    rh->tls_client_random_psk_key.data, rh->tls_client_random_psk_key.size);
 }
 
 void vpn_relay_destroy(VpnRelay *relay) {
@@ -952,16 +964,16 @@ std::string kex_group_name_by_nid(int kex_group_nid) {
 }
 
 #ifdef SSL_set_custom_client_random
-std::optional<std::array<uint8_t, SSL3_RANDOM_SIZE>> derive_client_random_from_psk(U8View psk_key, const char *sni) {
+#ifndef OPENSSL_IS_BORINGSSL
+#warning "SSL_set_custom_client_random is defined but OPENSSL_IS_BORINGSSL is not; \
+HKDF argument order may differ from BoringSSL and break PSK derivation"
+#endif
+std::optional<std::array<uint8_t, SSL3_RANDOM_SIZE>> derive_client_random_psk_with_salt(
+        U8View psk_key, const char *sni, U8View salt) {
     constexpr size_t half = SSL3_RANDOM_SIZE / 2;
     static constexpr std::string_view INFO = "tls13 encryption context";
 
-    if (sni == nullptr || sni[0] == '\0') {
-        return std::nullopt;
-    }
-
-    uint8_t random[half];
-    if (1 != RAND_bytes(random, half)) {
+    if (sni == nullptr || sni[0] == '\0' || salt.size() != half) {
         return std::nullopt;
     }
 
@@ -970,7 +982,7 @@ std::optional<std::array<uint8_t, SSL3_RANDOM_SIZE>> derive_client_random_from_p
 
     uint8_t derived_key[half];
     if (1
-            != HKDF(derived_key, half, EVP_sha256(), psk_key.data(), psk_key.size(), random, half,
+            != HKDF(derived_key, half, EVP_sha256(), psk_key.data(), psk_key.size(), salt.data(), salt.size(),
                     reinterpret_cast<const uint8_t *>(INFO.data()), INFO.size())) {
         return std::nullopt;
     }
@@ -984,12 +996,20 @@ std::optional<std::array<uint8_t, SSL3_RANDOM_SIZE>> derive_client_random_from_p
     AES_encrypt(sni_hash, ciphertext, &aes_key); // encrypts the first 16 bytes of sni_hash
 
     std::array<uint8_t, SSL3_RANDOM_SIZE> result{};
-    std::copy_n(random, half, result.begin());
+    std::copy_n(salt.data(), half, result.begin());
     std::copy_n(ciphertext, half, result.begin() + half);
 
     OPENSSL_cleanse(derived_key, half);
     OPENSSL_cleanse(&aes_key, sizeof(aes_key));
     return result;
+}
+
+std::optional<std::array<uint8_t, SSL3_RANDOM_SIZE>> derive_client_random_from_psk(U8View psk_key, const char *sni) {
+    uint8_t random[SSL3_RANDOM_SIZE / 2];
+    if (1 != RAND_bytes(random, sizeof(random))) {
+        return std::nullopt;
+    }
+    return derive_client_random_psk_with_salt(psk_key, sni, U8View{random, sizeof(random)});
 }
 #endif
 
