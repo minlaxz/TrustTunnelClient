@@ -138,13 +138,14 @@ jobs:
               "$(cat /proc/sys/net/ipv6/conf/$i/autoconf 2>/dev/null)"
           done
 
-          echo "=== ping SNAT source and default gateway ==="
+          echo "=== ping SNAT source, egress iface and default gateway ==="
           SNAT_SRC=$(ip6tables -t nat -S POSTROUTING 2>/dev/null | sed -n 's/.*--to-source \([^ ]*\).*/\1/p' | head -1)
           echo "SNAT source: ${SNAT_SRC:-<none>}"
           [ -n "$SNAT_SRC" ] && ping6 -c 2 -W 3 "$SNAT_SRC" 2>&1 || true
-          GW=$(ip -6 route show default 2>/dev/null | awk '{print $3}')
-          echo "default gw: ${GW:-<none>}"
-          [ -n "$GW" ] && ping6 -c 2 -W 3 "$GW" 2>&1 || true
+          IF=$(ip -6 route get 2001:4860:4860::8888 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p')
+          GW=$(ip -6 route get 2001:4860:4860::8888 2>/dev/null | sed -n 's/.*via \([^ ]*\).*/\1/p')
+          echo "egress iface: ${IF:-<none>}, gateway: ${GW:-<none>}"
+          [ -n "$GW" ] && [ -n "$IF" ] && ping6 -c 2 -W 3 "${GW}%${IF}" 2>&1 || true
 
           echo "=== host direct v4 control ==="
           curl -4 -sS --max-time 15 -o /dev/null -w 'host v4 -> HTTP %{http_code}\n' https://1.1.1.1 || echo "FAIL: host v4 unreachable"
