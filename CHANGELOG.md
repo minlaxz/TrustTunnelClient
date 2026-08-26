@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- Added `client_random_psk_key` configuration parameter. When set, the full 32-byte TLS client_random is derived from this key and the SNI using the HKDF-SHA256 + AES-128 algorithm (matching AdGuard VPN's `ag_secret` mechanism), and fed to `SSL_set_custom_client_random`. This allows TLS authentication via key-derived client_random without the private BoringSSL/OpenSSL patch. Consumers (e.g. `vpn-client`) must switch to `openssl` from the `adguard/oss` Conan channel instead of `adguard/private` to use this feature. Not available on MIPS builds (stock OpenSSL).
+- Added `client_random_psk_key` configuration parameter. When set, part of the TLS `client_random` is derived from this key, the SNI, and other random bytes using the HKDF-SHA256 + AES-128 algorithm, and fed to `SSL_set_custom_client_random`. This allows TLS authentication via key-derived `client_random`.
 
 ### Changed
 

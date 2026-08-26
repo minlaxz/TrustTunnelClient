@@ -146,37 +146,9 @@ static std::optional<TrustTunnelConfig::Location> build_endpoint(const toml::tab
                 errlog(g_logger, "Invalid client_random format: mask can't be empty");
                 return std::nullopt;
             }
-            // Validate hex for both prefix and mask parts
-            for (const auto &part : {location.client_random, location.client_random_mask}) {
-                if (!part.empty() && (part.size() % 2 != 0 || !std::ranges::all_of(part, [](unsigned char c) {
-                        return std::isxdigit(c) != 0;
-                    }))) {
-                    errlog(g_logger, "Invalid client_random format: not valid hex");
-                    return std::nullopt;
-                }
-            }
         } else {
-            // Format: just prefix
-            if (!client_random->empty()
-                    && (client_random->size() % 2 != 0 || !std::ranges::all_of(*client_random, [](unsigned char c) {
-                           return std::isxdigit(c) != 0;
-                       }))) {
-                errlog(g_logger, "Invalid client_random format: not valid hex");
-                return std::nullopt;
-            }
             location.client_random = *client_random;
         }
-    }
-
-    // Parse TLS client random PSK key (hex string)
-    if (auto psk_key = config["client_random_psk_key"].value<std::string>()) {
-        if (!psk_key->empty() && (psk_key->size() % 2 != 0 || !std::ranges::all_of(*psk_key, [](unsigned char c) {
-                return std::isxdigit(c) != 0;
-            }))) {
-            errlog(g_logger, "Invalid client_random_psk_key: not valid hex");
-            return std::nullopt;
-        }
-        location.client_random_psk_key = *psk_key;
     }
 
     if (const auto *x = config["dns_upstreams"].as_array()) {

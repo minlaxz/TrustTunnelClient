@@ -1108,13 +1108,6 @@ std::variant<SslPtr, std::string> make_ssl(int (*verification_callback)(X509_STO
 
         SSL_set_custom_client_random(ssl.get(), client_random_data.data(), client_random_data.size());
     }
-#else
-    if (!tls_client_random_psk_key.empty()) {
-        warnlog(g_logger,
-                "TLS client_random PSK key is configured but "
-                "SSL_set_custom_client_random is unavailable on this build; "
-                "PSK authentication will not work");
-    }
 #endif
 
 // Mimic Chrome's ClientHello if we are using BoringSSL.
