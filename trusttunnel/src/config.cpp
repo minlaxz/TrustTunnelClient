@@ -1,4 +1,3 @@
-#include <cctype>
 #include <common/logger.h>
 #include <cstdio>
 #include <functional>
@@ -149,6 +148,11 @@ static std::optional<TrustTunnelConfig::Location> build_endpoint(const toml::tab
         } else {
             location.client_random = *client_random;
         }
+    }
+
+    // Parse TLS client random PSK key (hex string)
+    if (auto psk_key = config["client_random_psk_key"].value<std::string>()) {
+        location.client_random_psk_key = *psk_key;
     }
 
     if (const auto *x = config["dns_upstreams"].as_array()) {

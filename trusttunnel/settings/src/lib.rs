@@ -78,8 +78,9 @@ impl Endpoint {
     }
 
     pub fn doc_client_random_psk_key() -> &'static str {
-        "TLS client random PSK key (hex string). When set, the full 32-byte client_random \
-         is derived from this key and the SNI using HKDF-SHA256 + AES-128"
+        "TLS client random PSK key (hex string). When set, part of client_random \
+         is derived from this key, the SNI, and other random bytes using \
+         HKDF-SHA256 + AES-128"
     }
 
     pub fn doc_skip_verification() -> &'static str {
