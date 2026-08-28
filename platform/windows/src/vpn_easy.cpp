@@ -116,6 +116,10 @@ vpn_easy_t *vpn_easy_start_ex(const char *toml_config, on_state_changed_t state_
         return nullptr;
     }
 
+    // Apply the configured log level before anything below emits logs so that
+    // the whole process logs at the level requested by the config.
+    ag::Logger::set_log_level(trusttunnel_config->loglevel);
+
     ag::vpn_post_quantum_group_set_enabled(trusttunnel_config->post_quantum_group_enabled);
 
     ag::VpnCallbacks callbacks;
@@ -616,6 +620,16 @@ int32_t vpn_easy_service_start(const wchar_t *service_name, const wchar_t *pipe_
         on_state_changed_t state_changed_cb, void *state_changed_cb_arg, on_connection_info_json_t connection_info_cb,
         void *connection_info_cb_arg) {
     std::scoped_lock lock{g_svc_state.mutex};
+
+    // Set loglevel
+    toml::parse_result parsed_config = toml::parse(toml_config);
+    if (!parsed_config) {
+        errlog(g_logger, "Failed to parse the TOML config");
+        return VPN_EASY_SVC_ERR_OTHER;
+    } else if (auto built_config = ag::TrustTunnelConfig::build_config(parsed_config)) {
+        infolog(g_logger, "Applying log level from config: {}", magic_enum::enum_name(built_config->loglevel));
+        ag::Logger::set_log_level(built_config->loglevel);
+    }
 
     // Reuse an existing attached (monitoring) connection.
     if (g_svc_state.pipe_client && g_svc_state.is_attached) {
