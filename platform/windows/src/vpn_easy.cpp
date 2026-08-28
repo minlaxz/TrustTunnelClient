@@ -106,13 +106,13 @@ vpn_easy_t *vpn_easy_start_ex(const char *toml_config, on_state_changed_t state_
         on_connection_info_t connection_info_cb, void *connection_info_cb_arg) {
     toml::parse_result parsed_config = toml::parse(toml_config);
     if (!parsed_config) {
-        warnlog(g_logger, "Failed to parse the TOML config: {}", parsed_config.error().description());
+        errlog(g_logger, "Failed to parse the TOML config");
         return nullptr;
     }
 
     auto trusttunnel_config = ag::TrustTunnelConfig::build_config(parsed_config);
     if (!trusttunnel_config) {
-        warnlog(g_logger, "Failed to build a trusttunnel client config");
+        errlog(g_logger, "Failed to build a trusttunnel client config");
         return nullptr;
     }
 
@@ -239,7 +239,7 @@ public:
     }
     void stop_async() {
         if (!m_loop) {
-            errlog(g_logger, "Can't stop VPN service because event loop is not running");
+            warnlog(g_logger, "Can't stop VPN service because event loop is not running");
             return;
         }
         m_loop->submit([this]() {
