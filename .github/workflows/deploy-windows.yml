@@ -2,16 +2,40 @@ name: Deploy Windows library
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version override (e.g. 1.2.3). If omitted, the version comes from git describe."
+        required: false
+        type: string
+      ref:
+        description: "Git ref (SHA or branch) to build from. If omitted, uses the default checkout."
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      version:
+        description: "Version override (e.g. 1.2.3). If omitted, the version comes from git describe."
+        required: false
+        type: string
+      ref:
+        description: "Git ref (SHA or branch) to build from. If omitted, uses the default checkout."
+        required: false
+        type: string
 
 jobs:
+  resolve-images:
+    if: github.repository == 'AdGuardSoftwareLimited/trusttunnel-client'
+    uses: AdGuardSoftwareLimited/native-libs-common/.github/workflows/resolve-images.yml@master
+
   deploy-windows:
     name: Deploy library / Windows
     if: github.repository == 'AdGuardSoftwareLimited/trusttunnel-client'
+    needs: [resolve-images]
     environment: windows-gh-packages
     runs-on:
       - ephemeral
       - ephemeral-vmwin
-      - ${{ vars.BUILD_IMAGE_VERSION_WINDOWS }}
+      - ${{ needs.resolve-images.outputs.windows }}
       - ephemeral-limit-memory-6144
       - ephemeral-limit-cpu-8
     permissions:
@@ -20,6 +44,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+          # Full history + tags so git describe can resolve the version.
+          fetch-depth: 0
 
       - name: Retrieve Windows signing secrets
         uses: hashicorp/vault-action@v4
@@ -39,12 +67,16 @@ jobs:
 
       - name: Detect version
         id: version
-        run: |
-          $versionLine = Get-Content CHANGELOG.md | Select-String -Pattern '^## \[[0-9]+\.[0-9]+\.[0-9]+[^]]*\]' | Select-Object -First 1
-          if (!$versionLine) { throw 'Failed to detect VERSION from CHANGELOG.md' }
-          $VERSION = ($versionLine.ToString() -replace '^## \[', '' -replace '\].*', '').Trim()
-          "version=$VERSION" | Out-File -FilePath $Env:GITHUB_OUTPUT -Append
         shell: powershell
+        run: |
+          if ('${{ inputs.version }}' -ne '') {
+            $VERSION = '${{ inputs.version }}'
+          } else {
+            $VERSION = git describe --tags --match 'v*'
+            $VERSION = $VERSION -replace '^v', ''
+          }
+          if (!$VERSION) { throw 'Failed to detect VERSION via git describe' }
+          "version=$VERSION" | Out-File -FilePath $Env:GITHUB_OUTPUT -Append
 
       - name: Build and publish
         env:
