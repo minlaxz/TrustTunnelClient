@@ -2,9 +2,12 @@
 #include "vpn/vpn_easy.h"
 #include "vpn/vpn_easy_service.h"
 
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <sstream>
 
 #include <fmt/format.h>
@@ -18,6 +21,27 @@ static constexpr const wchar_t *PIPE_NAME = L"\\\\.\\pipe\\TestPipeName";
 static void state_changed_cb(void *, int state) {
     fmt::println(stderr, "VPN state changed: ({}) {}", state,
             magic_enum::enum_name(static_cast<ag::VpnSessionState>(state)));
+}
+
+/// State recorder for automated scenarios.
+static std::mutex g_state_mutex;
+static std::condition_variable g_state_cv;
+static int g_last_state = -1;
+
+static void recording_state_changed_cb(void *, int state) {
+    {
+        std::scoped_lock lock{g_state_mutex};
+        g_last_state = state;
+    }
+    g_state_cv.notify_all();
+    state_changed_cb(nullptr, state);
+}
+
+static bool wait_for_state(int state, std::chrono::milliseconds timeout) {
+    std::unique_lock lock{g_state_mutex};
+    return g_state_cv.wait_for(lock, timeout, [&] {
+        return g_last_state == state;
+    });
 }
 
 /// Read config.toml into a string. Return empty string on failure.
@@ -82,24 +106,25 @@ static int test_start_stop() {
         return -1;
     }
 
-    fmt::println(stderr, "Starting service...");
-    int32_t ret = vpn_easy_service_start(
-            SERVICE_NAME, PIPE_NAME, config.c_str(), state_changed_cb, nullptr, nullptr, nullptr);
+    fmt::println(stderr, "Starting VPN...");
+    vpn_easy_service_attach(SERVICE_NAME, PIPE_NAME, state_changed_cb, nullptr, nullptr, nullptr);
+    int32_t ret = vpn_easy_service_start(config.c_str());
     if (ret) {
         fmt::println(stderr, "vpn_easy_service_start: {}", ret);
         return -1;
     }
-    fmt::println(stderr, "Service started. Type 's' to stop");
+    fmt::println(stderr, "VPN started. Type 's' to stop");
     while (getchar() != 's') {
     }
 
-    fmt::println(stderr, "Stopping service...");
-    ret = vpn_easy_service_stop(SERVICE_NAME, PIPE_NAME);
+    fmt::println(stderr, "Stopping VPN...");
+    ret = vpn_easy_service_stop();
     if (ret) {
         fmt::println(stderr, "vpn_easy_service_stop: {}", ret);
         return -1;
     }
-    fmt::println(stderr, "Service stopped.");
+    vpn_easy_service_detach();
+    fmt::println(stderr, "VPN stopped.");
 
     return 0;
 }
@@ -121,7 +146,8 @@ static int test_full_lifecycle() {
     }
 
     fmt::println(stderr, "Starting VPN via service...");
-    ret = vpn_easy_service_start(SERVICE_NAME, PIPE_NAME, config.c_str(), state_changed_cb, nullptr, nullptr, nullptr);
+    vpn_easy_service_attach(SERVICE_NAME, PIPE_NAME, state_changed_cb, nullptr, nullptr, nullptr);
+    ret = vpn_easy_service_start(config.c_str());
     if (ret) {
         fmt::println(stderr, "vpn_easy_service_start: {}", ret);
         vpn_easy_service_uninstall(SERVICE_NAME);
@@ -132,10 +158,78 @@ static int test_full_lifecycle() {
     }
 
     fmt::println(stderr, "Stopping VPN via service...");
-    ret = vpn_easy_service_stop(SERVICE_NAME, PIPE_NAME);
+    ret = vpn_easy_service_stop();
     if (ret) {
         fmt::println(stderr, "vpn_easy_service_stop: {}", ret);
     }
+    vpn_easy_service_detach();
+
+    fmt::println(stderr, "Uninstalling service...");
+    ret = vpn_easy_service_uninstall(SERVICE_NAME);
+    if (ret) {
+        fmt::println(stderr, "vpn_easy_service_uninstall: {}", ret);
+        return -1;
+    }
+
+    fmt::println(stderr, "Done.");
+    return 0;
+}
+
+/// Test that the VPN can be started again after it has stopped, without tearing down the Windows
+/// service in between. Regression for the "Service client is already active" stuck state: the
+/// second start must reuse the live connection to the still-running service.
+static int test_restart_after_stop() {
+    fmt::println(stderr, "=== test_restart_after_stop ===");
+
+    std::string config = read_config();
+    if (config.empty()) {
+        return -1;
+    }
+
+    int32_t ret = install_service();
+    if (ret) {
+        fmt::println(stderr, "vpn_easy_service_install: {}", ret);
+        return -1;
+    }
+
+    auto cleanup = [](int code) {
+        vpn_easy_service_stop();
+        vpn_easy_service_detach();
+        vpn_easy_service_uninstall(SERVICE_NAME);
+        return code;
+    };
+
+    vpn_easy_service_attach(SERVICE_NAME, PIPE_NAME, recording_state_changed_cb, nullptr, nullptr, nullptr);
+
+    for (int attempt = 1; attempt <= 2; ++attempt) {
+        fmt::println(stderr, "Starting VPN (attempt {})...", attempt);
+        ret = vpn_easy_service_start(config.c_str());
+        if (ret) {
+            fmt::println(stderr, "vpn_easy_service_start: {}", ret);
+            if (attempt == 2) {
+                fmt::println(stderr, "FAILED: a restart must not require the service to be stopped");
+            }
+            return cleanup(-1);
+        }
+        if (!wait_for_state(ag::VPN_SS_CONNECTED, std::chrono::seconds(30))) {
+            fmt::println(stderr, "Timed out waiting for VPN_SS_CONNECTED");
+            return cleanup(-1);
+        }
+
+        fmt::println(stderr, "Stopping VPN (attempt {})...", attempt);
+        ret = vpn_easy_service_stop();
+        if (ret) {
+            fmt::println(stderr, "vpn_easy_service_stop: {}", ret);
+            return cleanup(-1);
+        }
+        // The service reports the core's own DISCONNECTED; nothing is synthesized on either side.
+        if (!wait_for_state(ag::VPN_SS_DISCONNECTED, std::chrono::seconds(30))) {
+            fmt::println(stderr, "Timed out waiting for VPN_SS_DISCONNECTED");
+            return cleanup(-1);
+        }
+    }
+
+    vpn_easy_service_detach();
 
     fmt::println(stderr, "Uninstalling service...");
     ret = vpn_easy_service_uninstall(SERVICE_NAME);
@@ -159,10 +253,13 @@ int main(int argc, char **argv) {
     if (strcmp(test, "startstop") == 0) {
         return test_start_stop();
     }
+    if (strcmp(test, "restart_after_stop") == 0) {
+        return test_restart_after_stop();
+    }
     if (strcmp(test, "full") == 0) {
         return test_full_lifecycle();
     }
 
-    fmt::println(stderr, "Usage: {} [install|startstop|full]", argv[0]);
+    fmt::println(stderr, "Usage: {} [install|startstop|restart_after_stop|full]", argv[0]);
     return 1;
 }

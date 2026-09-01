@@ -790,6 +790,160 @@ TEST_F(PipeTest, ServerStopEventDuringActiveConnectionExitsCleanly) {
     EXPECT_TRUE(*loop_result);
 }
 
+// ---------------------------------------------------------------------------
+// PipeEndpoint::post() tests
+// ---------------------------------------------------------------------------
+
+// Poll a predicate until it returns true or the timeout elapses.
+template <typename F>
+bool wait_until(F &&pred, std::chrono::milliseconds timeout) {
+    auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (!pred()) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return false;
+        }
+        std::this_thread::sleep_for(10ms);
+    }
+    return true;
+}
+
+TEST_F(PipeTest, ServerRunsTaskPostedFromAnotherThread) {
+    // A task posted via post() must execute exactly once, on the server's loop thread.
+    MessageCollector collector;
+    PipeServer server{m_pipe_name.c_str(), m_stop_event.get(), collector.make_handler()};
+    LoopRunner runner{m_stop_event.get(), [&] {
+                          return server.loop();
+                      }};
+
+    std::atomic<int> run_count{0};
+    std::thread::id loop_thread_id;
+    std::thread poster([&] {
+        std::this_thread::sleep_for(50ms);
+        server.post([&] {
+            ++run_count;
+            loop_thread_id = std::this_thread::get_id();
+        });
+    });
+
+    ASSERT_TRUE(wait_until(
+            [&] {
+                return run_count.load() == 1;
+            },
+            TEST_TIMEOUT));
+    EXPECT_NE(loop_thread_id, poster.get_id());
+    // The task must not run twice.
+    std::this_thread::sleep_for(50ms);
+    EXPECT_EQ(run_count.load(), 1);
+
+    poster.join();
+    signal_stop();
+    ASSERT_TRUE(runner.wait_for(JOIN_TIMEOUT));
+}
+
+TEST_F(PipeTest, ServerRunsPostedTasksInFifoOrder) {
+    MessageCollector collector;
+    PipeServer server{m_pipe_name.c_str(), m_stop_event.get(), collector.make_handler()};
+    LoopRunner runner{m_stop_event.get(), [&] {
+                          return server.loop();
+                      }};
+
+    std::mutex order_lock;
+    std::vector<int> order;
+    for (int i = 0; i < 5; ++i) {
+        server.post([&, i] {
+            std::scoped_lock l{order_lock};
+            order.push_back(i);
+        });
+    }
+
+    ASSERT_TRUE(wait_until(
+            [&] {
+                std::scoped_lock l{order_lock};
+                return order.size() == 5;
+            },
+            TEST_TIMEOUT));
+    {
+        std::scoped_lock l{order_lock};
+        EXPECT_EQ(order, (std::vector<int>{0, 1, 2, 3, 4}));
+    }
+
+    signal_stop();
+    ASSERT_TRUE(runner.wait_for(JOIN_TIMEOUT));
+}
+
+TEST_F(PipeTest, ServerRunsTaskPostedFromHandler) {
+    // A task posted from inside the receive handler must run on the loop thread after the
+    // handler returns (i.e. without deadlocking the loop).
+    PipeServer *server_ptr = nullptr;
+    std::atomic<int> task_run_count{0};
+    PipeEndpoint::Handler handler = [&](VpnEasyServiceMessageType, ag::Uint8View) {
+        server_ptr->post([&] {
+            ++task_run_count;
+        });
+    };
+    PipeServer server{m_pipe_name.c_str(), m_stop_event.get(), handler};
+    server_ptr = &server;
+    LoopRunner runner{m_stop_event.get(), [&] {
+                          return server.loop();
+                      }};
+
+    Handle client = open_raw_client(m_pipe_name);
+    ASSERT_TRUE(client);
+    auto frame = make_framed(VPN_EASY_SVC_MSG_START, {});
+    ASSERT_TRUE(write_all(client.get(), frame));
+
+    ASSERT_TRUE(wait_until(
+            [&] {
+                return task_run_count.load() == 1;
+            },
+            TEST_TIMEOUT));
+
+    signal_stop();
+    ASSERT_TRUE(runner.wait_for(JOIN_TIMEOUT));
+}
+
+TEST_F(PipeTest, ClientIsConnectedReflectsPeerDisconnect) {
+    // is_connected() must report true after connecting and false after the peer closes.
+    Handle server_pipe{CreateNamedPipeW(m_pipe_name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1, 64 * 1024, 64 * 1024, 0, nullptr)};
+    ASSERT_TRUE(server_pipe);
+
+    MessageCollector collector;
+    PipeClient client{m_pipe_name.c_str(), m_stop_event.get(), collector.make_handler()};
+    LoopRunner runner{m_stop_event.get(), [&] {
+                          return client.loop();
+                      }};
+
+    // Accept the client's connection via overlapped ConnectNamedPipe.
+    OVERLAPPED ol{};
+    Handle ev{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+    ol.hEvent = ev.get();
+    BOOL ok = ConnectNamedPipe(server_pipe.get(), &ol);
+    DWORD err = GetLastError();
+    if (!ok && err == ERROR_IO_PENDING) {
+        ASSERT_EQ(WaitForSingleObject(ol.hEvent,
+                          static_cast<DWORD>(
+                                  std::chrono::duration_cast<std::chrono::milliseconds>(TEST_TIMEOUT).count())),
+                WAIT_OBJECT_0);
+        DWORD t = 0;
+        ASSERT_TRUE(GetOverlappedResult(server_pipe.get(), &ol, &t, FALSE));
+    } else if (!ok) {
+        ASSERT_EQ(err, static_cast<DWORD>(ERROR_PIPE_CONNECTED));
+    }
+
+    ASSERT_TRUE(client.wait_connected());
+    EXPECT_TRUE(client.is_connected());
+
+    // Tear down the server side; the client's loop() must exit and is_connected() go false.
+    DisconnectNamedPipe(server_pipe.get());
+    server_pipe.reset();
+
+    auto loop_result = runner.wait_for(JOIN_TIMEOUT);
+    ASSERT_TRUE(loop_result);
+    EXPECT_TRUE(*loop_result);
+    EXPECT_FALSE(client.is_connected());
+}
+
 TEST_F(PipeTest, ServerWithAuthenticatedUsersDescriptorAcceptsConnections) {
     auto sd = PipeServer::for_authenticated_users();
     ASSERT_TRUE(sd);
