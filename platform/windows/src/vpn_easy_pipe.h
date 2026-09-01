@@ -272,6 +272,13 @@ public:
      */
     bool wait_connected();
 
+    /**
+     * Whether the client is currently connected to the server.
+     */
+    bool is_connected() const {
+        return m_connected.load(std::memory_order_relaxed);
+    }
+
 protected:
     bool start_connect() override;
     void teardown_pipe() override;
