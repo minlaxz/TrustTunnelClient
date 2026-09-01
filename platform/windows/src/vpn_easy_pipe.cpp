@@ -182,15 +182,15 @@ bool PipeEndpoint::loop() {
             }
         }
 
-        // One message per iteration, followed by whatever it queued
+        run_pending_tasks();
+
+        // One message per iteration, preceded by whatever was queued before it
         if (m_connected.load(std::memory_order_relaxed) && !dispatch_one_message()) {
             if (auto r = handle_disconnect()) {
                 return *r;
             }
             continue;
         }
-
-        run_pending_tasks();
 
         // After any wake-up, try to issue a fresh read (if connected and not already pending) and
         // pump as many writes as possible.
