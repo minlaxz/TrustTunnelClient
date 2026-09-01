@@ -153,8 +153,7 @@ int32_t NativeVpnImpl::attach_service() {
 }
 
 int32_t NativeVpnImpl::start_service(const std::string &config) {
-    return vpn_easy_service_start(m_service_name.c_str(), m_pipe_name.c_str(), config.c_str(), s_notify_state_changed,
-            this, s_notify_connection_info, this);
+    return vpn_easy_service_start(config.c_str());
 }
 
 std::optional<FlutterError> NativeVpnImpl::Start(const std::string &config) {
@@ -179,7 +178,7 @@ std::optional<FlutterError> NativeVpnImpl::Start(const std::string &config) {
 }
 
 std::optional<FlutterError> NativeVpnImpl::Stop() {
-    int32_t stop_result = vpn_easy_service_stop(m_service_name.c_str(), m_pipe_name.c_str());
+    int32_t stop_result = vpn_easy_service_stop();
     if (stop_result != 0) {
         warnlog(m_logger, "Failed to stop VPN service: {}", stop_result);
     }

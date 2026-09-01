@@ -26,11 +26,8 @@ typedef enum {
      * A request to start (connect) the VPN client. The data field must contain the VPN client configuration
      * in TOML format (encoded in UTF-8 as per TOML specification).
      *
-     * If the client is already connecting or connected, it is requested to stop
-     * first and then start with the new configuration.
-     *
-     * If the client fails to start for whatever reason, the service will send a state change
-     * message with the state `VPN_SS_DISCONNECTED`.
+     * Ignored if the client is already connecting or connected: changing the configuration requires
+     * an explicit `VPN_EASY_SVC_MSG_STOP` first.
      */
     VPN_EASY_SVC_MSG_START = 0,
 
@@ -84,8 +81,7 @@ typedef enum {
 } VpnEasyServiceError;
 
 /** Callback for receiving connection info as a JSON string.
- *  Used by `vpn_easy_service_start()`, `vpn_easy_service_attach()`, and
- *  `vpn_easy_service_read_all_connection_info()`. */
+ *  Used by `vpn_easy_service_attach()` and `vpn_easy_service_read_all_connection_info()`. */
 typedef void (*on_connection_info_json_t)(void *arg, const char *json);
 
 /**
@@ -120,51 +116,38 @@ WIN_EXPORT int32_t vpn_easy_service_install(const wchar_t *image_path, const wch
 WIN_EXPORT int32_t vpn_easy_service_uninstall(const wchar_t *name);
 
 /**
- * Start the VPN service named `service_name`.
+ * Start the VPN client, using the service and the callbacks bound by `vpn_easy_service_attach()`.
  *
  * This will start the Windows service if it's not already running, connect to the running service
  * through the named pipe and instruct it to start the VPN client with the provided configuration.
+ * An existing pipe connection is reused. The service ignores the request if the VPN is already
+ * running: changing the configuration requires an explicit `vpn_easy_service_stop()` first.
  *
- * If the caller has previously attached via `vpn_easy_service_attach()`, the existing pipe
- * connection is reused to send the START command instead of creating a new connection.
- *
- * It shall then pass the service state change messages to `state_changed_cb` and connection info
- * events to `connection_info_cb`, which must remain valid (along with their `_arg` parameters)
- * until the service is stopped with `vpn_easy_service_stop()`. The callbacks are invoked on an
- * unspecified thread, and may be called concurrently with `vpn_easy_service_start()`.
- *
- * @param service_name The service name that was passed to `vpn_easy_service_install()`.
- * @param pipe_name The name of the pipe that was passed to `vpn_easy_service_install()`.
  * @param toml_config The VPN client configuration in TOML format (encoded in UTF-8 as per TOML specification).
- * @param state_changed_cb A function which will be called each time the VPN client's state changes.
- * @param state_changed_cb_arg An argument passed to each invocation of the state change function.
- * @param connection_info_cb A function called for each connection info event.
- *                           The `json` parameter is a null-terminated UTF-8 JSON string.
- *                           May be NULL if the caller does not need connection info.
- * @param connection_info_cb_arg An argument passed to each invocation of the connection info function.
  * @return Zero on success, one of `VpnEasyServiceError` constants on failure.
  */
-WIN_EXPORT int32_t vpn_easy_service_start(const wchar_t *service_name, const wchar_t *pipe_name,
-        const char *toml_config, on_state_changed_t state_changed_cb, void *state_changed_cb_arg,
-        on_connection_info_json_t connection_info_cb, void *connection_info_cb_arg);
+WIN_EXPORT int32_t vpn_easy_service_start(const char *toml_config);
 
 /**
- * Stop the VPN service named `service_name`.
+ * Stop the VPN client.
  *
- * This will stop both the VPN client and the Windows service.
- * After this function returns, the state change callback will not be called anymore.
+ * The request is sent to the service and this function returns without waiting: completion is
+ * reported as a `VPN_SS_DISCONNECTED` state change. The Windows service is left running so that a
+ * subsequent `vpn_easy_service_start()` does not have to start it again; use
+ * `vpn_easy_service_uninstall()` to stop the service itself.
  *
- * @param service_name The service name that was passed to `vpn_easy_service_install()`.
- * @param pipe_name The name of the pipe that was passed to `vpn_easy_service_install()`.
  * @return Zero on success, one of `VpnEasyServiceError` constants on failure.
  */
-WIN_EXPORT int32_t vpn_easy_service_stop(const wchar_t *service_name, const wchar_t *pipe_name);
+WIN_EXPORT int32_t vpn_easy_service_stop();
 
 /**
  * Connect to a running VPN service to monitor its state. Does not start the VPN.
  * The service must already be running (typically started by a previous call to
  * `vpn_easy_service_start()`). If the service is not running, returns
  * `VPN_EASY_SVC_ERR_NO_SUCH_SERVICE`.
+ *
+ * Must be called before `vpn_easy_service_start()`: it binds the service name, the pipe name and
+ * the callbacks, and that binding is kept even when the service turns out not to be running.
  *
  * After a successful call, state changes are delivered to `state_changed_cb` and
  * connection info events to `connection_info_cb`. The callbacks (and their `_arg`

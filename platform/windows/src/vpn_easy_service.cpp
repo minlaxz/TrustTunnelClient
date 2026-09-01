@@ -4,9 +4,9 @@
 #include <cstdio>
 #include <filesystem>
 #include <functional>
-#include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include "common/defs.h"
 #include "common/logger.h"
@@ -33,21 +33,20 @@ static HANDLE g_shutdown_event;
 static vpn_easy_t *g_vpn;
 static std::optional<ag::PersistentRingBuffer> g_ring_buffer;
 static std::filesystem::path g_ring_buffer_path;
-static std::mutex g_state_mutex;
 static std::optional<ag::FileLogger> g_file_logger;
-/// Current VPN session state. Updated by `send_state()` and reset on VPN stop.
 static int32_t g_current_vpn_state = ag::VPN_SS_DISCONNECTED;
 
-static void send_state_message(PipeServer &server, int32_t state) {
+static void send_state(PipeServer &server, int32_t state) {
+    g_current_vpn_state = state;
     uint32_t net_state = htonl(static_cast<uint32_t>(state));
     server.send(VPN_EASY_SVC_MSG_STATE_CHANGED, {reinterpret_cast<const uint8_t *>(&net_state), sizeof(net_state)});
 }
 
-/// Send a `VPN_EASY_SVC_MSG_STATE_CHANGED` message with the given state value.
-static void send_state(PipeServer &server, int32_t state) {
-    std::scoped_lock lock{g_state_mutex};
-    g_current_vpn_state = state;
-    send_state_message(server, state);
+/// Destroy the current VPN client, if any. Must be called on the pipe loop thread.
+static void release_vpn() {
+    if (g_vpn != nullptr) {
+        vpn_easy_stop_ex(std::exchange(g_vpn, nullptr));
+    }
 }
 
 /// Handle an incoming pipe message from a client.
@@ -55,18 +54,26 @@ static void pipe_handler(PipeServer &server, VpnEasyServiceMessageType what, ag:
     switch (what) {
     case VPN_EASY_SVC_MSG_START: {
         if (g_vpn != nullptr) {
-            infolog(g_logger, "VPN already running, stopping before restart");
-            vpn_easy_stop_ex(g_vpn);
-            g_vpn = nullptr;
-            std::scoped_lock lock{g_state_mutex};
-            g_current_vpn_state = ag::VPN_SS_DISCONNECTED;
+            warnlog(g_logger, "VPN is already running, ignoring START");
+            break;
         }
         std::string toml_config(reinterpret_cast<const char *>(data.data()), data.size());
         infolog(g_logger, "Starting VPN client");
         g_vpn = vpn_easy_start_ex(
                 toml_config.c_str(),
                 [](void *arg, int state) {
-                    send_state(*static_cast<PipeServer *>(arg), state);
+                    // Runs on the VPN client's event loop thread; everything else runs on the
+                    // pipe loop thread, so the work is deferred there.
+                    PipeServer *server = static_cast<PipeServer *>(arg);
+                    server->post([server, state]() {
+                        send_state(*server, state);
+                        if (state == ag::VPN_SS_DISCONNECTED) {
+                            // Release the client promptly so that the OS tunnel adapter and its
+                            // worker threads do not linger for the lifetime of the service.
+                            infolog(g_logger, "VPN disconnected, releasing VPN client");
+                            release_vpn();
+                        }
+                    });
                 },
                 &server,
                 [](void *arg, void *connection_info) {
@@ -85,24 +92,21 @@ static void pipe_handler(PipeServer &server, VpnEasyServiceMessageType what, ag:
                 &server);
         if (g_vpn == nullptr) {
             warnlog(g_logger, "vpn_easy_start_ex failed");
-            send_state(server, ag::VPN_SS_DISCONNECTED);
         }
         break;
     }
     case VPN_EASY_SVC_MSG_STOP: {
         if (g_vpn == nullptr) {
             infolog(g_logger, "VPN already stopped, ignoring STOP");
-            return;
+            break;
         }
         infolog(g_logger, "Stopping VPN client");
-        vpn_easy_stop_ex(g_vpn);
-        g_vpn = nullptr;
+        release_vpn();
         break;
     }
     case VPN_EASY_SVC_MSG_QUERY_STATE: {
-        std::scoped_lock lock{g_state_mutex};
         infolog(g_logger, "Client queried current state: {}", g_current_vpn_state);
-        send_state_message(server, g_current_vpn_state);
+        send_state(server, g_current_vpn_state);
         break;
     }
     case VPN_EASY_SVC_MSG_CLEAR_LOGS: {
@@ -159,12 +163,7 @@ static void WINAPI service_main(DWORD /*argc*/, LPWSTR * /*argv*/) {
 
     if (g_vpn != nullptr) {
         infolog(g_logger, "Shutting down: stopping VPN client");
-        {
-            std::scoped_lock lock{g_state_mutex};
-            g_current_vpn_state = ag::VPN_SS_DISCONNECTED;
-        }
-        vpn_easy_stop_ex(g_vpn);
-        g_vpn = nullptr;
+        release_vpn();
     }
 
     service_set_status(SERVICE_STOPPED);
