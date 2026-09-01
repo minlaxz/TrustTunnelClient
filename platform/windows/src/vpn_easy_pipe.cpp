@@ -105,6 +105,29 @@ void PipeEndpoint::send(VpnEasyServiceMessageType what, ag::Uint8View data) {
     SetEvent(m_wake_event);
 }
 
+void PipeEndpoint::post(std::function<void()> task) {
+    {
+        std::scoped_lock l{m_tasks_lock};
+        m_tasks.push_back(std::move(task));
+    }
+    SetEvent(m_wake_event);
+}
+
+void PipeEndpoint::run_pending_tasks() {
+    for (;;) {
+        std::function<void()> task;
+        {
+            std::scoped_lock l{m_tasks_lock};
+            if (m_tasks.empty()) {
+                return;
+            }
+            task = std::move(m_tasks.front());
+            m_tasks.pop_front();
+        }
+        task();
+    }
+}
+
 bool PipeEndpoint::loop() {
     if (m_io_event == nullptr || m_write_event == nullptr || m_wake_event == nullptr) {
         return false;
@@ -158,6 +181,10 @@ bool PipeEndpoint::loop() {
                 continue;
             }
         }
+
+        // Run tasks posted via post() (e.g. by the VPN state callback running on another
+        // thread). They are executed on this thread and never concurrently with a handler.
+        run_pending_tasks();
 
         // After any wake-up, try to issue a fresh read (if connected and not already pending) and
         // pump as many writes as possible.

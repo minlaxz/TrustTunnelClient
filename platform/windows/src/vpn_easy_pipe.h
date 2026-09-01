@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <deque>
 #include <functional>
 #include <list>
 #include <mutex>
@@ -74,6 +75,14 @@ public:
      * pending messages.
      */
     void send(VpnEasyServiceMessageType what, ag::Uint8View data);
+
+    /**
+     * Enqueue a task to be executed on `loop()`'s thread. Thread-safe; may be called from any
+     * thread, including from inside the receive handler. Tasks are executed in FIFO order and
+     * never concurrently with each other or with a handler. Tasks posted after `loop()` has
+     * returned are never executed.
+     */
+    void post(std::function<void()> task);
 
 protected:
     /**
@@ -183,12 +192,19 @@ private:
     std::mutex m_pending_writes_lock;
     std::list<PendingWrite> m_pending_writes; // Guarded by m_pending_writes_lock.
 
+    // Tasks posted via post(); drained by the loop thread. Guarded by m_tasks_lock.
+    std::mutex m_tasks_lock;
+    std::deque<std::function<void()>> m_tasks;
+
     // Owned exclusively by the loop thread: the message currently being written (possibly with an
     // overlapped WriteFile in flight). Moved here from m_pending_writes under the lock and kept
     // alive until the write fully completes, so that send() can never free the in-flight buffer.
     std::optional<PendingWrite> m_inflight_write;
 
     static std::vector<uint8_t> compose_message(VpnEasyServiceMessageType what, ag::Uint8View data);
+
+    // Run all tasks queued via post(). Called by the loop thread only.
+    void run_pending_tasks();
 
     // Returns nullopt to continue the loop; otherwise the value `loop()` should return.
     std::optional<bool> handle_disconnect();
