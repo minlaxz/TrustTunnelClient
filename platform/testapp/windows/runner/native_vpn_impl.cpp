@@ -70,13 +70,13 @@ int32_t NativeVpnImpl::install_service() {
     wchar_t exe_path[MAX_PATH];
     GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
     std::filesystem::path exe_dir = std::filesystem::path(exe_path).parent_path();
-    std::wstring service_exe = exe_dir / L"vpn_easy_service.exe";
+    std::wstring service_exe = exe_dir / L"trusttunnel_service.exe";
     std::wstring logs_dir = m_logs_dir.wstring();
     std::wstring ring_buffer_path_w = m_ring_buffer_path.wstring();
 
-    std::wstring helper_exe = (exe_dir / L"service_installer.exe").wstring();
+    std::wstring helper_exe = (exe_dir / L"trusttunnel_service_installer.exe").wstring();
 
-    // Build the command-line arguments for service_installer.exe:
+    // Build the command-line arguments for trusttunnel_service_installer.exe:
     //   install <image_path> <logs_dir> <pipe_name> <name> <display_name> <description> <ring_buffer_path>
     std::wstring params = L"install";
     params += L" \"" + service_exe + L"\"";
@@ -119,7 +119,7 @@ int32_t NativeVpnImpl::uninstall_service() {
     wchar_t exe_path[MAX_PATH];
     GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
     std::filesystem::path exe_dir = std::filesystem::path(exe_path).parent_path();
-    std::wstring helper_exe = (exe_dir / L"service_installer.exe").wstring();
+    std::wstring helper_exe = (exe_dir / L"trusttunnel_service_installer.exe").wstring();
 
     std::wstring params = L"uninstall \"" + m_service_name + L"\"";
 

@@ -1,4 +1,4 @@
-// service_installer.exe — Elevated helper for installing/uninstalling the VPN service.
+// trusttunnel_service_installer.exe — Elevated helper for installing/uninstalling the VPN service.
 //
 // Exit codes:
 //   0 — Success
@@ -17,9 +17,9 @@ static ag::Logger g_logger{"SERVICE_INSTALLER"};
 static void print_usage() {
     fmt::print(stderr,
             "Usage:\n"
-            "  service_installer.exe install <image_path> <logs_dir> <pipe_name>\n"
-            "                             <name> <display_name> <description> <ring_buffer_path>\n"
-            "  service_installer.exe uninstall <name>\n");
+            "  trusttunnel_service_installer.exe install <image_path> <logs_dir> <pipe_name>\n"
+            "                                        <name> <display_name> <description> <ring_buffer_path>\n"
+            "  trusttunnel_service_installer.exe uninstall <name>\n");
 }
 
 int wmain(int argc, wchar_t *argv[]) {

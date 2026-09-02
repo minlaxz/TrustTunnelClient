@@ -81,11 +81,11 @@ install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
   COMPONENT Runtime)
 
 # Copy the VPN service executable next to the testapp so it can be found at runtime
-install(TARGETS vpn_easy_service RUNTIME DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+install(TARGETS trusttunnel_service RUNTIME DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
   COMPONENT Runtime)
 
 # Copy the service installer helper next to the testapp so it can be found at runtime
-install(TARGETS service_installer RUNTIME DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+install(TARGETS trusttunnel_service_installer RUNTIME DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
   COMPONENT Runtime)
 
 install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"

@@ -38,15 +38,15 @@ target_link_libraries(vpn_easy vpn_easy_a)
 add_executable(vpn_easy_test test/vpn_easy_test.cpp)
 target_link_libraries(vpn_easy_test vpn_easy_a)
 
-add_executable(vpn_easy_service src/vpn_easy_service.cpp)
-target_link_libraries(vpn_easy_service vpn_easy_a)
+add_executable(trusttunnel_service src/vpn_easy_service.cpp)
+target_link_libraries(trusttunnel_service vpn_easy_a)
 
-add_executable(service_installer src/service_installer.cpp)
-target_link_libraries(service_installer vpn_easy_a)
+add_executable(trusttunnel_service_installer src/trusttunnel_service_installer.cpp)
+target_link_libraries(trusttunnel_service_installer vpn_easy_a)
 
 add_executable(vpn_easy_service_test test/vpn_easy_service_test.cpp)
 target_link_libraries(vpn_easy_service_test vpn_easy_a)
-add_dependencies(vpn_easy_service_test vpn_easy_service)
+add_dependencies(vpn_easy_service_test trusttunnel_service)
 
 enable_testing()
 include(${ROOT_DIR}/cmake/add_unit_test.cmake)
@@ -69,13 +69,13 @@ install(TARGETS vpn_easy
 )
 
 # Install the service executable
-install(TARGETS vpn_easy_service
+install(TARGETS trusttunnel_service
     RUNTIME DESTINATION bin
     COMPONENT Runtime
 )
 
 # Install the service installer helper executable
-install(TARGETS service_installer
+install(TARGETS trusttunnel_service_installer
     RUNTIME DESTINATION bin
     COMPONENT Runtime
 )

@@ -58,16 +58,16 @@ static std::string read_config() {
 
 /// Install the service. If it already exists, uninstall first and retry.
 static int32_t install_service() {
-    auto image = absolute(std::filesystem::path(".") / "vpn_easy_service.exe").wstring();
-    auto logfile = absolute(std::filesystem::path(".") / "vpn_easy_service.log").wstring();
+    auto image = absolute(std::filesystem::path(".") / "trusttunnel_service.exe").wstring();
+    auto logs_dir = absolute(std::filesystem::path(".") / "trusttunnel_service.log").wstring();
     auto ring_buffer = absolute(std::filesystem::path(".") / "test_ring_buffer.dat").wstring();
 
-    int32_t ret = vpn_easy_service_install(image.c_str(), logfile.c_str(), PIPE_NAME, SERVICE_NAME, L"VPN easy service",
-            L"Test description", ring_buffer.c_str());
+    int32_t ret = vpn_easy_service_install(image.c_str(), logs_dir.c_str(), PIPE_NAME, SERVICE_NAME,
+            L"VPN easy service", L"Test description", ring_buffer.c_str());
     if (ret == VPN_EASY_SVC_ERR_SERVICE_EXISTS) {
         fmt::println(stderr, "Service already exists, uninstalling first...");
         vpn_easy_service_uninstall(SERVICE_NAME);
-        ret = vpn_easy_service_install(image.c_str(), logfile.c_str(), PIPE_NAME, SERVICE_NAME, L"VPN easy service",
+        ret = vpn_easy_service_install(image.c_str(), logs_dir.c_str(), PIPE_NAME, SERVICE_NAME, L"VPN easy service",
                 L"Test description", ring_buffer.c_str());
     }
     return ret;

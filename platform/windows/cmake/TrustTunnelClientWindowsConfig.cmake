@@ -2,9 +2,9 @@
 # This file is consumed by find_package(TrustTunnelClientWindows) or via FetchContent.
 #
 # Provided targets:
-#   TrustTunnelClientWindows::vpn_easy           - Shared library (DLL) for VPN adapter API
-#   TrustTunnelClientWindows::vpn_easy_service   - Executable for VPN Windows service
-#   TrustTunnelClientWindows::service_installer  - Elevated helper for installing/uninstalling VPN service
+#   TrustTunnelClientWindows::vpn_easy                      - Shared library (DLL) for VPN adapter API
+#   TrustTunnelClientWindows::trusttunnel_service           - Executable for VPN Windows service
+#   TrustTunnelClientWindows::trusttunnel_service_installer - Elevated helper for installing/uninstalling VPN service
 #
 # The shared library (vpn_easy.dll) contains all transitive dependencies linked
 # in at build time — the consumer does not need to provide any third-party libs.
@@ -29,18 +29,18 @@ if(NOT TARGET TrustTunnelClientWindows::vpn_easy)
     )
 endif()
 
-# --- TrustTunnelClientWindows::vpn_easy_service (executable) ---
-if(NOT TARGET TrustTunnelClientWindows::vpn_easy_service)
-    add_executable(TrustTunnelClientWindows::vpn_easy_service IMPORTED)
-    set_target_properties(TrustTunnelClientWindows::vpn_easy_service PROPERTIES
-        IMPORTED_LOCATION "${_INSTALL_PREFIX}/bin/vpn_easy_service.exe"
+# --- TrustTunnelClientWindows::trusttunnel_service (executable) ---
+if(NOT TARGET TrustTunnelClientWindows::trusttunnel_service)
+    add_executable(TrustTunnelClientWindows::trusttunnel_service IMPORTED)
+    set_target_properties(TrustTunnelClientWindows::trusttunnel_service PROPERTIES
+        IMPORTED_LOCATION "${_INSTALL_PREFIX}/bin/trusttunnel_service.exe"
     )
 endif()
 
-# --- TrustTunnelClientWindows::service_installer (executable) ---
-if(NOT TARGET TrustTunnelClientWindows::service_installer)
-    add_executable(TrustTunnelClientWindows::service_installer IMPORTED)
-    set_target_properties(TrustTunnelClientWindows::service_installer PROPERTIES
-        IMPORTED_LOCATION "${_INSTALL_PREFIX}/bin/service_installer.exe"
+# --- TrustTunnelClientWindows::trusttunnel_service_installer (executable) ---
+if(NOT TARGET TrustTunnelClientWindows::trusttunnel_service_installer)
+    add_executable(TrustTunnelClientWindows::trusttunnel_service_installer IMPORTED)
+    set_target_properties(TrustTunnelClientWindows::trusttunnel_service_installer PROPERTIES
+        IMPORTED_LOCATION "${_INSTALL_PREFIX}/bin/trusttunnel_service_installer.exe"
     )
 endif()
