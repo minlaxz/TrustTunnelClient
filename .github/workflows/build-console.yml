@@ -12,10 +12,18 @@ on:
         description: 'Git ref (SHA or branch) to build from. If omitted, uses the default checkout.'
         required: false
         type: string
+      version:
+        description: 'Version override. If omitted, the build resolves it via git describe.'
+        required: false
+        type: string
   workflow_call:
     inputs:
       ref:
         description: 'Git ref (SHA or branch) to build from. If omitted, uses the default checkout.'
+        required: false
+        type: string
+      version:
+        description: 'Version override. If omitted, the build resolves it via git describe.'
         required: false
         type: string
 
@@ -39,7 +47,8 @@ jobs:
       - ephemeral-limit-memory-8192
       - ephemeral-limit-cpu-6
     container:
-      image: adguard/core-libs:2.11
+      # 2.12 is the first image with zig, which the musl-cross-* presets use.
+      image: adguard/core-libs:2.12
     permissions:
       contents: read
       id-token: write
@@ -62,13 +71,28 @@ jobs:
             secret/data/ci-secrets/gpg-signing gpgPassword | GPG_PASSWORD
 
       - name: Configure Conan
+        shell: bash
         run: |
+          # The image's bundled Conan is too old to know about newer compiler
+          # versions (e.g. the zig wrapper now reports as Clang 22), so install
+          # an upgraded Conan into a venv. It reuses the image's Conan cache.
+          python3 -m venv venv
+          source ./venv/bin/activate
+          pip install conan
           conan remote add --index 0 art ${{ vars.CONAN_REPO_URL }} || true
 
+      # The build resolves the version via git describe. A manual `version`
+      # input forces an override (version.cmake reads the TT_CLIENT_VERSION env
+      # var), which also drives the artifact name below.
       - name: Detect version
         id: version
         run: |
-          VERSION=$(git describe --tags --match 'v*' | sed -e 's/^v//')
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+            echo "TT_CLIENT_VERSION=${VERSION}" >> "$GITHUB_ENV"
+          else
+            VERSION=$(git describe --tags --match 'v*' | sed -e 's/^v//')
+          fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Import GPG key
@@ -79,41 +103,26 @@ jobs:
         env:
           GPG_KEY: devteam@adguard.com
           VERSION: ${{ steps.version.outputs.version }}
+          # The image already provides the Conan dependencies.
+          SKIP_BOOTSTRAP: 1
         shell: bash
         run: |
           set -x -e
+          source ./venv/bin/activate
 
           mkdir -p artifacts
           ARTIFACTS_DIR=${PWD}/artifacts
 
           rustup +nightly component add rust-src
 
+          # One musl-cross-<arch> preset per architecture; see CMakePresets.json.
           ARCHES="x86_64 aarch64 armv7 mips mipsel"
           for ARCH in $ARCHES; do
-            EABI=
-            SF=
-            case ${ARCH} in
-              armv7) EABI=eabi ;;
-              mips) SF=sf ;;
-              mipsel) SF=sf ;;
-            esac
-
-            # Rust adds -lunwind when statically linking; create symlink
-            p="$(${ARCH}-linux-musl${EABI}${SF}-gcc -print-file-name=libgcc_eh.a)" && \
-              [ "$p" != "libgcc_eh.a" ] && ln -sf "$(basename "$p")" "$(dirname "$p")/libunwind.a"
-
-            cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -GNinja \
-              -DCMAKE_C_COMPILER=${ARCH}-linux-musl${EABI}${SF}-gcc \
-              -DCMAKE_CXX_COMPILER=${ARCH}-linux-musl${EABI}${SF}-g++ \
-              -DCMAKE_SYSTEM_PROCESSOR=${ARCH} \
-              -DCMAKE_SYSTEM_NAME=Linux \
-              -DCMAKE_CROSSCOMPILING=ON \
-              -S . -B build_${ARCH}
-            cmake --build build_${ARCH} --target trusttunnel_client
-            cmake --build build_${ARCH} --target setup_wizard
+            BUILD_DIR=cmake-build-musl-cross-${ARCH}-relwithdebinfo
+            make PRESET=musl-cross-${ARCH}-relwithdebinfo all
 
             NAME=trusttunnel_client-v${VERSION}-linux-${ARCH}
-            pushd build_${ARCH}/trusttunnel
+            pushd ${BUILD_DIR}/trusttunnel
               llvm-strip trusttunnel_client
               llvm-strip setup_wizard
               gpg --default-key "${GPG_KEY}" --detach-sig \
@@ -141,8 +150,10 @@ jobs:
         env:
           ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
           ARTIFACTORY_API_KEY: ${{ secrets.ARTIFACTORY_API_KEY }}
+        shell: bash
         run: |
           set -x
+          source ./venv/bin/activate
           conan remote login art "$ARTIFACTORY_USER" --password "$ARTIFACTORY_API_KEY" || true
           conan upload -r art -c "*" 2>&1 | grep --line-buffered "Uploading" || true
 
@@ -182,10 +193,18 @@ jobs:
           pip install conan
           conan remote add --index 0 art ${{ vars.CONAN_REPO_URL }} || true
 
+      # The build resolves the version via git describe. A manual `version`
+      # input forces an override (version.cmake reads the TT_CLIENT_VERSION env
+      # var), which also drives the artifact name below.
       - name: Detect version
         id: version
         run: |
-          VERSION=$(git describe --tags --match 'v*' | sed -e 's/^v//')
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+            echo "TT_CLIENT_VERSION=${VERSION}" >> "$GITHUB_ENV"
+          else
+            VERSION=$(git describe --tags --match 'v*' | sed -e 's/^v//')
+          fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Import GPG key
@@ -205,21 +224,20 @@ jobs:
       - name: Build universal binary
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          # The runner image already provides the Conan dependencies.
+          SKIP_BOOTSTRAP: 1
         run: |
           set -x -e
           source ./venv/bin/activate
 
+          # Both slices use the clang-relwithdebinfo preset, so each one gets its
+          # own BUILD_DIR instead of the preset's default directory.
           ARCHES="x86_64 arm64"
           for ARCH in $ARCHES; do
-            cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -GNinja \
-              -DCMAKE_C_COMPILER=clang \
-              -DCMAKE_CXX_COMPILER=clang++ \
-              -DCMAKE_CXX_FLAGS="-stdlib=libc++" \
-              -DCMAKE_OSX_ARCHITECTURES=${ARCH} \
-              -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 \
-              -S . -B build_${ARCH}
-            cmake --build build_${ARCH} --target trusttunnel_client
-            cmake --build build_${ARCH} --target setup_wizard
+            make PRESET=clang-relwithdebinfo \
+              ARCH=${ARCH} \
+              BUILD_DIR=build_${ARCH} \
+              all
           done
 
           mkdir -p build_universal
@@ -325,6 +343,13 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
+          # The build resolves the version via git describe. A manual `version`
+          # input forces an override (version.cmake reads the TT_CLIENT_VERSION
+          # env var).
+          if ('${{ inputs.version }}' -ne '') {
+            $Env:TT_CLIENT_VERSION = '${{ inputs.version }}'
+          }
+
           & conan remote add --index 0 art $Env:CONAN_REPO_URL
 
           # Save vcvars to switch between them
@@ -342,16 +367,14 @@ jobs:
           function Build([string]$BuildDir, $VcvarsEnv, [string]$ArchName) {
             & {
               $VcvarsEnv | foreach { setvar $_ }
-              New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
-              pushd $BuildDir
-              & cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo `
-                -DCMAKE_C_COMPILER="cl.exe" `
-                -DCMAKE_CXX_COMPILER="cl.exe" `
-                -G Ninja ..
+              # GNU make is not part of the Windows image, so the Windows job
+              # drives the msvc-relwithdebinfo preset through cmake directly.
+              # Every architecture uses the same preset, so each one is
+              # configured into its own directory.
+              & cmake --preset msvc-relwithdebinfo -B $BuildDir
               if (!$?) { exit 1 }
-              & ninja trusttunnel_client setup_wizard
+              & cmake --build $BuildDir --target trusttunnel_client setup_wizard
               if (!$?) { exit 1 }
-              popd
             }
 
             # Collect the unsigned executables; they are signed by the reusable
@@ -421,7 +444,13 @@ jobs:
         run: |
           set -e -x
 
-          VERSION=$(git describe --tags --match 'v*' | sed -e 's/^v//')
+          # Match the version the build stamped: the manual `version` input
+          # overrides git describe (same as the build-windows job).
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION=$(git describe --tags --match 'v*' | sed -e 's/^v//')
+          fi
 
           mkdir -p artifacts
 
