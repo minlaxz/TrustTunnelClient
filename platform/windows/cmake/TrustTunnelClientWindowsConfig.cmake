@@ -2,29 +2,30 @@
 # This file is consumed by find_package(TrustTunnelClientWindows) or via FetchContent.
 #
 # Provided targets:
-#   TrustTunnelClientWindows::vpn_easy                      - Shared library (DLL) for VPN adapter API
-#   TrustTunnelClientWindows::trusttunnel_service           - Executable for VPN Windows service
+#   TrustTunnelClientWindows::trusttunnel               - Shared library (DLL) for VPN adapter API
+#   TrustTunnelClientWindows::trusttunnel_service       - Executable for VPN Windows service
 #   TrustTunnelClientWindows::trusttunnel_service_installer - Elevated helper for installing/uninstalling VPN service
 #
-# The shared library (vpn_easy.dll) contains all transitive dependencies linked
-# in at build time — the consumer does not need to provide any third-party libs.
-# At link time, only the import library (vpn_easy.lib) is needed.  At runtime,
-# vpn_easy.dll must be on the DLL search path (e.g., next to the executable).
+# The shared library (trusttunnel.dll) contains all transitive dependencies
+# linked in at build time — the consumer does not need to provide any
+# third-party libs.  At link time, only the import library (trusttunnel.lib)
+# is needed.  At runtime, trusttunnel.dll must be on the DLL search path
+# (e.g., next to the executable).
 #
 # Usage:
 #   find_package(TrustTunnelClientWindows REQUIRED)
-#   target_link_libraries(myapp PRIVATE TrustTunnelClientWindows::vpn_easy)
+#   target_link_libraries(myapp PRIVATE TrustTunnelClientWindows::trusttunnel)
 
 # Resolve all paths relative to this config file's location.
 # The layout is: <prefix>/lib/cmake/TrustTunnelClientWindows/TrustTunnelClientWindowsConfig.cmake
 set(_INSTALL_PREFIX "${CMAKE_CURRENT_LIST_DIR}/../../..")
 
-# --- TrustTunnelClientWindows::vpn_easy (shared library) ---
-if(NOT TARGET TrustTunnelClientWindows::vpn_easy)
-    add_library(TrustTunnelClientWindows::vpn_easy SHARED IMPORTED)
-    set_target_properties(TrustTunnelClientWindows::vpn_easy PROPERTIES
-        IMPORTED_LOCATION "${_INSTALL_PREFIX}/bin/vpn_easy.dll"
-        IMPORTED_IMPLIB "${_INSTALL_PREFIX}/lib/vpn_easy.lib"
+# --- TrustTunnelClientWindows::trusttunnel (shared library) ---
+if(NOT TARGET TrustTunnelClientWindows::trusttunnel)
+    add_library(TrustTunnelClientWindows::trusttunnel SHARED IMPORTED)
+    set_target_properties(TrustTunnelClientWindows::trusttunnel PROPERTIES
+        IMPORTED_LOCATION "${_INSTALL_PREFIX}/bin/trusttunnel.dll"
+        IMPORTED_IMPLIB "${_INSTALL_PREFIX}/lib/trusttunnel.lib"
         INTERFACE_INCLUDE_DIRECTORIES "${_INSTALL_PREFIX}/include"
     )
 endif()

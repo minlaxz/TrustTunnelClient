@@ -1,6 +1,6 @@
 #include "vpn/vpn.h"
-#include "vpn/vpn_easy.h"
-#include "vpn/vpn_easy_service.h"
+#include "vpn/trusttunnel.h"
+#include "vpn/trusttunnel_service.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -15,7 +15,7 @@
 
 #include "common/logger.h"
 
-static constexpr const wchar_t *SERVICE_NAME = L"vpn_easy_service";
+static constexpr const wchar_t *SERVICE_NAME = L"trusttunnel_service";
 static constexpr const wchar_t *PIPE_NAME = L"\\\\.\\pipe\\TestPipeName";
 
 static void state_changed_cb(void *, int state) {
@@ -62,12 +62,12 @@ static int32_t install_service() {
     auto logs_dir = absolute(std::filesystem::path(".") / "trusttunnel_service.log").wstring();
     auto ring_buffer = absolute(std::filesystem::path(".") / "test_ring_buffer.dat").wstring();
 
-    int32_t ret = vpn_easy_service_install(image.c_str(), logs_dir.c_str(), PIPE_NAME, SERVICE_NAME,
+    int32_t ret = trusttunnel_service_install(image.c_str(), logs_dir.c_str(), PIPE_NAME, SERVICE_NAME,
             L"VPN easy service", L"Test description", ring_buffer.c_str());
-    if (ret == VPN_EASY_SVC_ERR_SERVICE_EXISTS) {
+    if (ret == TRUSTTUNNEL_SVC_ERR_SERVICE_EXISTS) {
         fmt::println(stderr, "Service already exists, uninstalling first...");
-        vpn_easy_service_uninstall(SERVICE_NAME);
-        ret = vpn_easy_service_install(image.c_str(), logs_dir.c_str(), PIPE_NAME, SERVICE_NAME, L"VPN easy service",
+        trusttunnel_service_uninstall(SERVICE_NAME);
+        ret = trusttunnel_service_install(image.c_str(), logs_dir.c_str(), PIPE_NAME, SERVICE_NAME, L"VPN easy service",
                 L"Test description", ring_buffer.c_str());
     }
     return ret;
@@ -80,7 +80,7 @@ static int test_install_uninstall() {
     fmt::println(stderr, "Installing service...");
     int32_t ret = install_service();
     if (ret) {
-        fmt::println(stderr, "vpn_easy_service_install: {}", ret);
+        fmt::println(stderr, "trusttunnel_service_install: {}", ret);
         return -1;
     }
 
@@ -88,9 +88,9 @@ static int test_install_uninstall() {
     while (getchar() != 's') {
     }
 
-    ret = vpn_easy_service_uninstall(SERVICE_NAME);
+    ret = trusttunnel_service_uninstall(SERVICE_NAME);
     if (ret) {
-        fmt::println(stderr, "vpn_easy_service_uninstall: {}", ret);
+        fmt::println(stderr, "trusttunnel_service_uninstall: {}", ret);
         return -1;
     }
 
@@ -107,10 +107,10 @@ static int test_start_stop() {
     }
 
     fmt::println(stderr, "Starting VPN...");
-    vpn_easy_service_attach(SERVICE_NAME, PIPE_NAME, state_changed_cb, nullptr, nullptr, nullptr);
-    int32_t ret = vpn_easy_service_start(config.c_str());
+    trusttunnel_service_attach(SERVICE_NAME, PIPE_NAME, state_changed_cb, nullptr, nullptr, nullptr);
+    int32_t ret = trusttunnel_service_start(config.c_str());
     if (ret) {
-        fmt::println(stderr, "vpn_easy_service_start: {}", ret);
+        fmt::println(stderr, "trusttunnel_service_start: {}", ret);
         return -1;
     }
     fmt::println(stderr, "VPN started. Type 's' to stop");
@@ -118,12 +118,12 @@ static int test_start_stop() {
     }
 
     fmt::println(stderr, "Stopping VPN...");
-    ret = vpn_easy_service_stop();
+    ret = trusttunnel_service_stop();
     if (ret) {
-        fmt::println(stderr, "vpn_easy_service_stop: {}", ret);
+        fmt::println(stderr, "trusttunnel_service_stop: {}", ret);
         return -1;
     }
-    vpn_easy_service_detach();
+    trusttunnel_service_detach();
     fmt::println(stderr, "VPN stopped.");
 
     return 0;
@@ -141,16 +141,16 @@ static int test_full_lifecycle() {
     fmt::println(stderr, "Installing service...");
     int32_t ret = install_service();
     if (ret) {
-        fmt::println(stderr, "vpn_easy_service_install: {}", ret);
+        fmt::println(stderr, "trusttunnel_service_install: {}", ret);
         return -1;
     }
 
     fmt::println(stderr, "Starting VPN via service...");
-    vpn_easy_service_attach(SERVICE_NAME, PIPE_NAME, state_changed_cb, nullptr, nullptr, nullptr);
-    ret = vpn_easy_service_start(config.c_str());
+    trusttunnel_service_attach(SERVICE_NAME, PIPE_NAME, state_changed_cb, nullptr, nullptr, nullptr);
+    ret = trusttunnel_service_start(config.c_str());
     if (ret) {
-        fmt::println(stderr, "vpn_easy_service_start: {}", ret);
-        vpn_easy_service_uninstall(SERVICE_NAME);
+        fmt::println(stderr, "trusttunnel_service_start: {}", ret);
+        trusttunnel_service_uninstall(SERVICE_NAME);
         return -1;
     }
     fmt::println(stderr, "VPN started. Type 's' to stop");
@@ -158,16 +158,16 @@ static int test_full_lifecycle() {
     }
 
     fmt::println(stderr, "Stopping VPN via service...");
-    ret = vpn_easy_service_stop();
+    ret = trusttunnel_service_stop();
     if (ret) {
-        fmt::println(stderr, "vpn_easy_service_stop: {}", ret);
+        fmt::println(stderr, "trusttunnel_service_stop: {}", ret);
     }
-    vpn_easy_service_detach();
+    trusttunnel_service_detach();
 
     fmt::println(stderr, "Uninstalling service...");
-    ret = vpn_easy_service_uninstall(SERVICE_NAME);
+    ret = trusttunnel_service_uninstall(SERVICE_NAME);
     if (ret) {
-        fmt::println(stderr, "vpn_easy_service_uninstall: {}", ret);
+        fmt::println(stderr, "trusttunnel_service_uninstall: {}", ret);
         return -1;
     }
 
@@ -188,24 +188,24 @@ static int test_restart_after_stop() {
 
     int32_t ret = install_service();
     if (ret) {
-        fmt::println(stderr, "vpn_easy_service_install: {}", ret);
+        fmt::println(stderr, "trusttunnel_service_install: {}", ret);
         return -1;
     }
 
     auto cleanup = [](int code) {
-        vpn_easy_service_stop();
-        vpn_easy_service_detach();
-        vpn_easy_service_uninstall(SERVICE_NAME);
+        trusttunnel_service_stop();
+        trusttunnel_service_detach();
+        trusttunnel_service_uninstall(SERVICE_NAME);
         return code;
     };
 
-    vpn_easy_service_attach(SERVICE_NAME, PIPE_NAME, recording_state_changed_cb, nullptr, nullptr, nullptr);
+    trusttunnel_service_attach(SERVICE_NAME, PIPE_NAME, recording_state_changed_cb, nullptr, nullptr, nullptr);
 
     for (int attempt = 1; attempt <= 2; ++attempt) {
         fmt::println(stderr, "Starting VPN (attempt {})...", attempt);
-        ret = vpn_easy_service_start(config.c_str());
+        ret = trusttunnel_service_start(config.c_str());
         if (ret) {
-            fmt::println(stderr, "vpn_easy_service_start: {}", ret);
+            fmt::println(stderr, "trusttunnel_service_start: {}", ret);
             if (attempt == 2) {
                 fmt::println(stderr, "FAILED: a restart must not require the service to be stopped");
             }
@@ -217,9 +217,9 @@ static int test_restart_after_stop() {
         }
 
         fmt::println(stderr, "Stopping VPN (attempt {})...", attempt);
-        ret = vpn_easy_service_stop();
+        ret = trusttunnel_service_stop();
         if (ret) {
-            fmt::println(stderr, "vpn_easy_service_stop: {}", ret);
+            fmt::println(stderr, "trusttunnel_service_stop: {}", ret);
             return cleanup(-1);
         }
         // The service reports the core's own DISCONNECTED; nothing is synthesized on either side.
@@ -229,12 +229,12 @@ static int test_restart_after_stop() {
         }
     }
 
-    vpn_easy_service_detach();
+    trusttunnel_service_detach();
 
     fmt::println(stderr, "Uninstalling service...");
-    ret = vpn_easy_service_uninstall(SERVICE_NAME);
+    ret = trusttunnel_service_uninstall(SERVICE_NAME);
     if (ret) {
-        fmt::println(stderr, "vpn_easy_service_uninstall: {}", ret);
+        fmt::println(stderr, "trusttunnel_service_uninstall: {}", ret);
         return -1;
     }
 

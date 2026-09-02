@@ -7,7 +7,7 @@
 #include <windows.h>
 
 namespace ag {
-namespace vpn_easy {
+namespace trusttunnel_windows {
 
 /// RAII exclusive byte-range lock on a "<path>.lock" sidecar via `LockFileEx`.
 /// Cross-session safe (any process with directory access can take it, avoiding
@@ -65,5 +65,5 @@ private:
     HANDLE m_handle;
 };
 
-} // namespace vpn_easy
+} // namespace trusttunnel_windows
 } // namespace ag

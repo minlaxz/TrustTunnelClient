@@ -9,7 +9,7 @@
 #include "vpn/file_logger.h"
 
 namespace ag {
-namespace vpn_easy {
+namespace trusttunnel_windows {
 
 /// Base name of the client-process rotating log family (`<CLIENT_LOG_BASE>.log`).
 inline constexpr const char *CLIENT_LOG_BASE = "client";
@@ -28,5 +28,5 @@ public:
     }
 };
 
-} // namespace vpn_easy
+} // namespace trusttunnel_windows
 } // namespace ag

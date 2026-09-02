@@ -3,9 +3,9 @@
 // Exit codes:
 //   0 — Success
 //   1 — Invalid usage / arguments
-//   2+ — One of the VpnEasyServiceError codes
+//   2+ — One of the TrusttunnelServiceError codes
 
-#include "vpn/vpn_easy_service.h"
+#include "vpn/trusttunnel_service.h"
 
 #include <string>
 
@@ -45,11 +45,11 @@ int wmain(int argc, wchar_t *argv[]) {
         const wchar_t *description = argv[7];
         const wchar_t *ring_buffer_path = argv[8];
 
-        int32_t result = vpn_easy_service_install(
+        int32_t result = trusttunnel_service_install(
                 image_path, logs_dir, pipe_name, name, display_name, description, ring_buffer_path);
 
         if (result != 0) {
-            errlog(g_logger, "vpn_easy_service_install failed with error code: {}", result);
+            errlog(g_logger, "trusttunnel_service_install failed with error code: {}", result);
             return result;
         }
 
@@ -66,10 +66,10 @@ int wmain(int argc, wchar_t *argv[]) {
 
         const wchar_t *name = argv[2];
 
-        int32_t result = vpn_easy_service_uninstall(name);
+        int32_t result = trusttunnel_service_uninstall(name);
 
         if (result != 0) {
-            errlog(g_logger, "vpn_easy_service_uninstall failed with error code: {}", result);
+            errlog(g_logger, "trusttunnel_service_uninstall failed with error code: {}", result);
             return result;
         }
 

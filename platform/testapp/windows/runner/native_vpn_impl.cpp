@@ -1,7 +1,7 @@
 #include "native_vpn_impl.h"
 #include "vpn/vpn.h"
-#include "vpn/vpn_easy.h"
-#include "vpn/vpn_easy_service.h"
+#include "vpn/trusttunnel.h"
+#include "vpn/trusttunnel_service.h"
 
 #include <filesystem>
 
@@ -27,10 +27,10 @@ NativeVpnImpl::NativeVpnImpl(IUIThreadDispatcher *dispatcher, FlutterCallbacks &
         , m_service_name(std::move(service_name))
         , m_pipe_name(std::move(pipe_name)) {
     // Install the client-process file log sink before anything logs.
-    vpn_easy_log_init(m_logs_dir.wstring().c_str());
+    trusttunnel_log_init(m_logs_dir.wstring().c_str());
 
     // Read all persisted connection info records on construction (before VPN is started)
-    vpn_easy_service_read_all_connection_info(m_ring_buffer_path.wstring().c_str(), s_notify_connection_info, this);
+    trusttunnel_service_read_all_connection_info(m_ring_buffer_path.wstring().c_str(), s_notify_connection_info, this);
 
     // Try to attach to a running service to detect current VPN state.
     int32_t attach_result = attach_service();
@@ -43,7 +43,7 @@ NativeVpnImpl::NativeVpnImpl(IUIThreadDispatcher *dispatcher, FlutterCallbacks &
 }
 
 NativeVpnImpl::~NativeVpnImpl() {
-    vpn_easy_service_detach();
+    trusttunnel_service_detach();
 }
 
 void NativeVpnImpl::NotifyStateChanged(int state) {
@@ -101,9 +101,9 @@ int32_t NativeVpnImpl::install_service() {
     if (!ShellExecuteExW(&sei)) {
         DWORD err = GetLastError();
         if (err == ERROR_CANCELLED) {
-            return VPN_EASY_SVC_ERR_ACCESS;
+            return TRUSTTUNNEL_SVC_ERR_ACCESS;
         }
-        return VPN_EASY_SVC_ERR_OTHER;
+        return TRUSTTUNNEL_SVC_ERR_OTHER;
     }
 
     // Wait for the elevated helper to finish.
@@ -134,9 +134,9 @@ int32_t NativeVpnImpl::uninstall_service() {
     if (!ShellExecuteExW(&sei)) {
         DWORD err = GetLastError();
         if (err == ERROR_CANCELLED) {
-            return VPN_EASY_SVC_ERR_ACCESS;
+            return TRUSTTUNNEL_SVC_ERR_ACCESS;
         }
-        return VPN_EASY_SVC_ERR_OTHER;
+        return TRUSTTUNNEL_SVC_ERR_OTHER;
     }
 
     WaitForSingleObject(sei.hProcess, INFINITE);
@@ -148,18 +148,18 @@ int32_t NativeVpnImpl::uninstall_service() {
 }
 
 int32_t NativeVpnImpl::attach_service() {
-    return vpn_easy_service_attach(
+    return trusttunnel_service_attach(
             m_service_name.c_str(), m_pipe_name.c_str(), s_notify_state_changed, this, s_notify_connection_info, this);
 }
 
 int32_t NativeVpnImpl::start_service(const std::string &config) {
-    return vpn_easy_service_start(config.c_str());
+    return trusttunnel_service_start(config.c_str());
 }
 
 std::optional<FlutterError> NativeVpnImpl::Start(const std::string &config) {
     int32_t start_result = start_service(config);
 
-    if (start_result == VPN_EASY_SVC_ERR_NO_SUCH_SERVICE) {
+    if (start_result == TRUSTTUNNEL_SVC_ERR_NO_SUCH_SERVICE) {
         // Service not installed — install once (needs admin), then retry.
         int32_t install_result = install_service();
         if (install_result != 0) {
@@ -178,7 +178,7 @@ std::optional<FlutterError> NativeVpnImpl::Start(const std::string &config) {
 }
 
 std::optional<FlutterError> NativeVpnImpl::Stop() {
-    int32_t stop_result = vpn_easy_service_stop();
+    int32_t stop_result = trusttunnel_service_stop();
     if (stop_result != 0) {
         warnlog(m_logger, "Failed to stop VPN service: {}", stop_result);
     }
@@ -191,7 +191,7 @@ ErrorOr<flutter::EncodableList> NativeVpnImpl::ExportLogs() {
             / ("trusttunnel_windows_logs_" + std::to_string(static_cast<unsigned long long>(GetTickCount64())));
 
     flutter::EncodableList result;
-    vpn_easy_log_export(
+    trusttunnel_log_export(
             export_dir.wstring().c_str(),
             [](void *arg, const wchar_t *path) {
                 // Dart strings are marshaled as UTF-8; transcode the native wide path.
@@ -204,6 +204,6 @@ ErrorOr<flutter::EncodableList> NativeVpnImpl::ExportLogs() {
 }
 
 std::optional<FlutterError> NativeVpnImpl::ClearLogs() {
-    vpn_easy_log_clear();
+    trusttunnel_log_clear();
     return std::nullopt;
 }

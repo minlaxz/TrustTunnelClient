@@ -1,5 +1,5 @@
-#include "vpn/vpn_easy_service.h"
-#include "vpn/vpn_easy.h"
+#include "vpn/trusttunnel_service.h"
+#include "vpn/trusttunnel.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -20,17 +20,17 @@
 #include "vpn/trusttunnel/connection_info.h"
 #include "vpn/trusttunnel/persistent_ring_buffer.h"
 #include "vpn/vpn.h"
-#include "vpn_easy_log.h"
-#include "vpn_easy_pipe.h"
+#include "trusttunnel_log.h"
+#include "trusttunnel_pipe.h"
 
-using ag::vpn_easy::PipeServer;
+using ag::trusttunnel_windows::PipeServer;
 
-static ag::Logger g_logger{"VPN_EASY_SERVICE"};
+static ag::Logger g_logger{"TRUSTTUNNEL_SERVICE"};
 
 static std::wstring g_pipe_name;
 static SERVICE_STATUS_HANDLE g_status_handle;
 static HANDLE g_shutdown_event;
-static vpn_easy_t *g_vpn;
+static trusttunnel_t *g_vpn;
 static std::optional<ag::PersistentRingBuffer> g_ring_buffer;
 static std::filesystem::path g_ring_buffer_path;
 static std::optional<ag::FileLogger> g_file_logger;
@@ -39,27 +39,27 @@ static int32_t g_current_vpn_state = ag::VPN_SS_DISCONNECTED;
 static void send_state(PipeServer &server, int32_t state) {
     g_current_vpn_state = state;
     uint32_t net_state = htonl(static_cast<uint32_t>(state));
-    server.send(VPN_EASY_SVC_MSG_STATE_CHANGED, {reinterpret_cast<const uint8_t *>(&net_state), sizeof(net_state)});
+    server.send(TRUSTTUNNEL_SVC_MSG_STATE_CHANGED, {reinterpret_cast<const uint8_t *>(&net_state), sizeof(net_state)});
 }
 
 /// Destroy the current VPN client, if any. Must be called on the pipe loop thread.
 static void release_vpn() {
     if (g_vpn != nullptr) {
-        vpn_easy_stop_ex(std::exchange(g_vpn, nullptr));
+        trusttunnel_stop_ex(std::exchange(g_vpn, nullptr));
     }
 }
 
 /// Handle an incoming pipe message from a client.
-static void pipe_handler(PipeServer &server, VpnEasyServiceMessageType what, ag::Uint8View data) {
+static void pipe_handler(PipeServer &server, TrusttunnelServiceMessageType what, ag::Uint8View data) {
     switch (what) {
-    case VPN_EASY_SVC_MSG_START: {
+    case TRUSTTUNNEL_SVC_MSG_START: {
         if (g_vpn != nullptr) {
             warnlog(g_logger, "VPN is already running, ignoring START");
             break;
         }
         std::string toml_config(reinterpret_cast<const char *>(data.data()), data.size());
         infolog(g_logger, "Starting VPN client");
-        g_vpn = vpn_easy_start_ex(
+        g_vpn = trusttunnel_start_ex(
                 toml_config.c_str(),
                 [](void *arg, int state) {
                     // Runs on the VPN client's event loop thread; everything else runs on the
@@ -81,21 +81,21 @@ static void pipe_handler(PipeServer &server, VpnEasyServiceMessageType what, ag:
                             ag::ConnectionInfo::to_json(static_cast<ag::VpnConnectionInfoEvent *>(connection_info));
                     // Persist to ring buffer if configured, with cross-process mutex
                     if (g_ring_buffer.has_value()) {
-                        ag::vpn_easy::ScopedFileLock lock(g_ring_buffer_path);
+                        ag::trusttunnel_windows::ScopedFileLock lock(g_ring_buffer_path);
                         if (lock) {
                             g_ring_buffer->append(json);
                         }
                     }
-                    static_cast<PipeServer *>(arg)->send(VPN_EASY_SVC_MSG_CONNECTION_INFO,
+                    static_cast<PipeServer *>(arg)->send(TRUSTTUNNEL_SVC_MSG_CONNECTION_INFO,
                             {reinterpret_cast<const uint8_t *>(json.data()), json.size()});
                 },
                 &server);
         if (g_vpn == nullptr) {
-            warnlog(g_logger, "vpn_easy_start_ex failed");
+            warnlog(g_logger, "trusttunnel_start_ex failed");
         }
         break;
     }
-    case VPN_EASY_SVC_MSG_STOP: {
+    case TRUSTTUNNEL_SVC_MSG_STOP: {
         if (g_vpn == nullptr) {
             infolog(g_logger, "VPN already stopped, ignoring STOP");
             break;
@@ -104,20 +104,20 @@ static void pipe_handler(PipeServer &server, VpnEasyServiceMessageType what, ag:
         release_vpn();
         break;
     }
-    case VPN_EASY_SVC_MSG_QUERY_STATE: {
+    case TRUSTTUNNEL_SVC_MSG_QUERY_STATE: {
         infolog(g_logger, "Client queried current state: {}", g_current_vpn_state);
         send_state(server, g_current_vpn_state);
         break;
     }
-    case VPN_EASY_SVC_MSG_CLEAR_LOGS: {
+    case TRUSTTUNNEL_SVC_MSG_CLEAR_LOGS: {
         infolog(g_logger, "Clearing service logs on client request");
         if (g_file_logger.has_value()) {
             g_file_logger->clear_logs();
         }
         break;
     }
-    case VPN_EASY_SVC_MSG_STATE_CHANGED:
-    case VPN_EASY_SVC_MSG_CONNECTION_INFO:
+    case TRUSTTUNNEL_SVC_MSG_STATE_CHANGED:
+    case TRUSTTUNNEL_SVC_MSG_CONNECTION_INFO:
         warnlog(g_logger, "Ignoring server-to-client message type: {}", static_cast<int>(what));
         break;
     default:
@@ -153,7 +153,7 @@ static void WINAPI service_main(DWORD /*argc*/, LPWSTR * /*argv*/) {
     service_set_status(SERVICE_START_PENDING);
 
     PipeServer server{g_pipe_name.c_str(), g_shutdown_event,
-            [&server](VpnEasyServiceMessageType what, ag::Uint8View data) {
+            [&server](TrusttunnelServiceMessageType what, ag::Uint8View data) {
                 pipe_handler(server, what, data);
             },
             PipeServer::for_authenticated_users().get()};
@@ -176,8 +176,8 @@ int wmain(int argc, wchar_t **argv) {
 
     // argv[1] is the logs directory; the service writes its rotating "service" log family there.
     std::filesystem::path logs_dir = argv[1];
-    auto log_sync = std::make_shared<ag::vpn_easy::WindowsFileLoggerSync>();
-    g_file_logger.emplace(logs_dir, ag::vpn_easy::SERVICE_LOG_BASE, ag::FileLogger::DEFAULT_MAX_FILE_SIZE,
+    auto log_sync = std::make_shared<ag::trusttunnel_windows::WindowsFileLoggerSync>();
+    g_file_logger.emplace(logs_dir, ag::trusttunnel_windows::SERVICE_LOG_BASE, ag::FileLogger::DEFAULT_MAX_FILE_SIZE,
             ag::FileLogger::DEFAULT_ARCHIVE_COUNT, log_sync);
     g_file_logger->install();
     ag::Logger::set_log_level(ag::LOG_LEVEL_INFO);
@@ -195,7 +195,7 @@ int wmain(int argc, wchar_t **argv) {
             {nullptr, nullptr},
     };
 
-#ifndef AG_DEBUGGING_VPN_EASY_SERVICE
+#ifndef AG_DEBUGGING_TRUSTTUNNEL_SERVICE
     if (!StartServiceCtrlDispatcherW(start_table)) {
         errlog(g_logger, "StartServiceCtrlDispatcherW: {} ({})", GetLastError(), ag::sys::strerror(GetLastError()));
         return 3;

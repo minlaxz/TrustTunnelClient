@@ -15,9 +15,9 @@
 
 #include "common/defs.h"
 #include "common/logger.h"
-#include "vpn/vpn_easy_service.h"
+#include "vpn/trusttunnel_service.h"
 
-namespace ag::vpn_easy {
+namespace ag::trusttunnel_windows {
 
 namespace detail {
 /** Free a security descriptor returned by an SDDL helper. Used as the deleter for `SecurityDescriptorPtr`. */
@@ -52,7 +52,7 @@ public:
      * Callback invoked from `loop()`'s thread for every fully-received message.
      * The `data` view is valid only for the duration of the call.
      */
-    using Handler = std::function<void(VpnEasyServiceMessageType what, ag::Uint8View data)>;
+    using Handler = std::function<void(TrusttunnelServiceMessageType what, ag::Uint8View data)>;
 
     virtual ~PipeEndpoint();
 
@@ -74,7 +74,7 @@ public:
      * Drop the message if no peer is connected. If the internal queue is full, drop the oldest
      * pending messages.
      */
-    void send(VpnEasyServiceMessageType what, ag::Uint8View data);
+    void send(TrusttunnelServiceMessageType what, ag::Uint8View data);
 
     /**
      * Enqueue a task to be executed on `loop()`'s thread. Thread-safe; may be called from any
@@ -201,7 +201,7 @@ private:
     // alive until the write fully completes, so that send() can never free the in-flight buffer.
     std::optional<PendingWrite> m_inflight_write;
 
-    static std::vector<uint8_t> compose_message(VpnEasyServiceMessageType what, ag::Uint8View data);
+    static std::vector<uint8_t> compose_message(TrusttunnelServiceMessageType what, ag::Uint8View data);
 
     // Run all tasks queued via post(). Called by the loop thread only.
     void run_pending_tasks();
@@ -311,4 +311,4 @@ private:
     HANDLE m_connected_or_failed_event = nullptr;
 };
 
-} // namespace ag::vpn_easy
+} // namespace ag::trusttunnel_windows

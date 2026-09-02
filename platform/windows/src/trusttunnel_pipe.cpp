@@ -1,4 +1,4 @@
-#include "vpn_easy_pipe.h"
+#include "trusttunnel_pipe.h"
 
 #include <sddl.h>
 
@@ -12,7 +12,7 @@
 #include "common/system_error.h"
 #include "vpn/internal/wire_utils.h"
 
-namespace ag::vpn_easy {
+namespace ag::trusttunnel_windows {
 
 static ag::Logger g_server_logger{"PIPE_SERVER"};
 static ag::Logger g_client_logger{"PIPE_CLIENT"};
@@ -76,7 +76,7 @@ void PipeEndpoint::prepare_for_connect() {
     ResetEvent(m_write_event);
 }
 
-std::vector<uint8_t> PipeEndpoint::compose_message(VpnEasyServiceMessageType what, ag::Uint8View data) {
+std::vector<uint8_t> PipeEndpoint::compose_message(TrusttunnelServiceMessageType what, ag::Uint8View data) {
     assert(data.size() < size_t(UINT32_MAX));
     std::vector<uint8_t> ret;
     ret.resize(sizeof(uint32_t) + sizeof(uint32_t) + data.size());
@@ -87,7 +87,7 @@ std::vector<uint8_t> PipeEndpoint::compose_message(VpnEasyServiceMessageType wha
     return ret;
 }
 
-void PipeEndpoint::send(VpnEasyServiceMessageType what, ag::Uint8View data) {
+void PipeEndpoint::send(TrusttunnelServiceMessageType what, ag::Uint8View data) {
     {
         std::scoped_lock l{m_pending_writes_lock};
         // disconnect_and_reset() stores `false` BEFORE taking this lock, so any push that
@@ -294,7 +294,7 @@ bool PipeEndpoint::dispatch_one_message() {
         return true; // Need more bytes for the payload.
     }
 
-    m_handler(static_cast<VpnEasyServiceMessageType>(*what), *data);
+    m_handler(static_cast<TrusttunnelServiceMessageType>(*what), *data);
     ag::Uint8View remaining = r.get_buffer();
     std::memmove(m_input_buf.data(), remaining.data(), remaining.size());
     m_input_buf_used = remaining.size();
@@ -619,4 +619,4 @@ void PipeClient::teardown_pipe() {
     }
 }
 
-} // namespace ag::vpn_easy
+} // namespace ag::trusttunnel_windows

@@ -140,7 +140,7 @@ cmake -S "$PlatformDir" -B "$BuildDir" -G Ninja ^
     -DCMAKE_CXX_COMPILER=cl.exe ^
     -DCMAKE_INSTALL_PREFIX="$StagingDir"
 if %errorlevel% neq 0 exit /b %errorlevel%
-cmake --build "$BuildDir" --target vpn_easy trusttunnel_service trusttunnel_service_installer
+cmake --build "$BuildDir" --target trusttunnel_windows trusttunnel_service trusttunnel_service_installer
 if %errorlevel% neq 0 exit /b %errorlevel%
 cmake --install "$BuildDir"
 if %errorlevel% neq 0 exit /b %errorlevel%
@@ -186,7 +186,7 @@ if ($Sign) {
         Write-Host "Success"
     }
 
-    Sign-File (Join-Path $binDir "vpn_easy.dll")
+    Sign-File (Join-Path $binDir "trusttunnel.dll")
     Sign-File (Join-Path $binDir "trusttunnel_service.exe")
     Sign-File (Join-Path $binDir "trusttunnel_service_installer.exe")
 }

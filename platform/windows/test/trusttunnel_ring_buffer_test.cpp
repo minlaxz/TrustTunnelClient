@@ -14,7 +14,7 @@
 
 #include "scoped_file_lock.h"
 #include "vpn/trusttunnel/persistent_ring_buffer.h"
-#include "vpn/vpn_easy_service.h"
+#include "vpn/trusttunnel_service.h"
 
 namespace {
 
@@ -53,7 +53,7 @@ protected:
 TEST_F(RingBufferTest, ReadAllEmptyFile) {
     // File doesn't exist yet — read should not crash and not call the callback
     bool called = false;
-    vpn_easy_service_read_all_connection_info(
+    trusttunnel_service_read_all_connection_info(
             m_path.c_str(),
             [](void *arg, const char * /*json*/) {
                 *static_cast<bool *>(arg) = true;
@@ -66,7 +66,7 @@ TEST_F(RingBufferTest, ReadAllExistingRecords) {
     write_records(5);
 
     std::vector<std::string> received;
-    vpn_easy_service_read_all_connection_info(
+    trusttunnel_service_read_all_connection_info(
             m_path.c_str(),
             [](void *arg, const char *json) {
                 static_cast<std::vector<std::string> *>(arg)->emplace_back(json);
@@ -90,7 +90,7 @@ TEST_F(RingBufferTest, ReadAllCorruptedFileClears) {
     }
 
     bool called = false;
-    vpn_easy_service_read_all_connection_info(
+    trusttunnel_service_read_all_connection_info(
             m_path.c_str(),
             [](void *arg, const char * /*json*/) {
                 *static_cast<bool *>(arg) = true;
@@ -132,7 +132,7 @@ protected:
 TEST_F(ScopedFileLockTest, AcquireLockOnNewFile) {
     // Acquiring the lock should succeed even if neither the ring buffer nor the
     // lock file exists yet (the lock file is created automatically).
-    ag::vpn_easy::ScopedFileLock lock(m_path);
+    ag::trusttunnel_windows::ScopedFileLock lock(m_path);
     EXPECT_TRUE(static_cast<bool>(lock));
 
     // The lock file should now exist on disk.
@@ -144,18 +144,18 @@ TEST_F(ScopedFileLockTest, AcquireLockOnExistingFile) {
     ag::PersistentRingBuffer buffer(m_path);
     ASSERT_TRUE(buffer.append("{\"test\":1}"));
 
-    ag::vpn_easy::ScopedFileLock lock(m_path);
+    ag::trusttunnel_windows::ScopedFileLock lock(m_path);
     EXPECT_TRUE(static_cast<bool>(lock));
 }
 
 TEST_F(ScopedFileLockTest, LockReleasedOnDestruction) {
     // Acquire and release a lock, then acquire again — must not deadlock.
     {
-        ag::vpn_easy::ScopedFileLock lock(m_path);
+        ag::trusttunnel_windows::ScopedFileLock lock(m_path);
         EXPECT_TRUE(static_cast<bool>(lock));
     }
     // After the lock is destroyed, a new lock should be acquired immediately.
-    ag::vpn_easy::ScopedFileLock lock2(m_path);
+    ag::trusttunnel_windows::ScopedFileLock lock2(m_path);
     EXPECT_TRUE(static_cast<bool>(lock2));
 }
 
@@ -163,12 +163,12 @@ TEST_F(ScopedFileLockTest, ExclusiveLockBlocksSecondLocker) {
     // Acquire the lock in this thread, then spawn a second thread that tries
     // to acquire the same lock. The second thread should block until the first
     // lock is released.
-    auto lock1 = std::make_unique<ag::vpn_easy::ScopedFileLock>(m_path);
+    auto lock1 = std::make_unique<ag::trusttunnel_windows::ScopedFileLock>(m_path);
     ASSERT_TRUE(static_cast<bool>(*lock1));
 
     std::atomic<bool> second_acquired{false};
     std::thread blocker([&] {
-        ag::vpn_easy::ScopedFileLock lock2(m_path);
+        ag::trusttunnel_windows::ScopedFileLock lock2(m_path);
         second_acquired.store(static_cast<bool>(lock2), std::memory_order_release);
     });
 
@@ -187,7 +187,7 @@ TEST_F(ScopedFileLockTest, LockOnInvalidPath) {
     // '?' is a reserved character in Windows paths, so CreateFileW always
     // rejects it with ERROR_INVALID_NAME. This makes the negative test
     // deterministic, independent of which drive letters are mounted.
-    ag::vpn_easy::ScopedFileLock lock(L"?:\\nonexistent\\deep\\path\\buffer.dat");
+    ag::trusttunnel_windows::ScopedFileLock lock(L"?:\\nonexistent\\deep\\path\\buffer.dat");
     EXPECT_FALSE(static_cast<bool>(lock));
 }
 
@@ -196,7 +196,7 @@ TEST_F(ScopedFileLockTest, LockAllowsReadAndWrite) {
     ag::PersistentRingBuffer buffer(m_path);
     ASSERT_TRUE(buffer.append("{\"locked_write\":true}"));
 
-    ag::vpn_easy::ScopedFileLock lock(m_path);
+    ag::trusttunnel_windows::ScopedFileLock lock(m_path);
     ASSERT_TRUE(static_cast<bool>(lock));
 
     auto result = buffer.read_all();
@@ -206,13 +206,13 @@ TEST_F(ScopedFileLockTest, LockAllowsReadAndWrite) {
 }
 
 // ---------------------------------------------------------------------------
-// vpn_easy_service_read_all_connection_info edge cases
+// trusttunnel_service_read_all_connection_info edge cases
 // ---------------------------------------------------------------------------
 
 TEST_F(RingBufferTest, ReadAllNullPath) {
     // Passing a null path should not crash.
     bool called = false;
-    vpn_easy_service_read_all_connection_info(
+    trusttunnel_service_read_all_connection_info(
             nullptr,
             [](void *arg, const char *) {
                 *static_cast<bool *>(arg) = true;
@@ -224,7 +224,7 @@ TEST_F(RingBufferTest, ReadAllNullPath) {
 TEST_F(RingBufferTest, ReadAllNullCallback) {
     // Passing a null callback should not crash.
     write_records(3);
-    vpn_easy_service_read_all_connection_info(m_path.c_str(), nullptr, nullptr);
+    trusttunnel_service_read_all_connection_info(m_path.c_str(), nullptr, nullptr);
     // No crash is the assertion.
 }
 
@@ -233,7 +233,7 @@ TEST_F(RingBufferTest, ReadAllSingleRecord) {
     ASSERT_TRUE(buffer.append("{\"only\":true}"));
 
     std::vector<std::string> received;
-    vpn_easy_service_read_all_connection_info(
+    trusttunnel_service_read_all_connection_info(
             m_path.c_str(),
             [](void *arg, const char *json) {
                 static_cast<std::vector<std::string> *>(arg)->emplace_back(json);
@@ -250,7 +250,7 @@ TEST_F(RingBufferTest, ReadAllManyRecords) {
     write_records(COUNT);
 
     std::vector<std::string> received;
-    vpn_easy_service_read_all_connection_info(
+    trusttunnel_service_read_all_connection_info(
             m_path.c_str(),
             [](void *arg, const char *json) {
                 static_cast<std::vector<std::string> *>(arg)->emplace_back(json);
@@ -270,7 +270,7 @@ TEST_F(RingBufferTest, ReadAllOverlap) {
     write_records(COUNT);
 
     std::vector<std::string> received;
-    vpn_easy_service_read_all_connection_info(
+    trusttunnel_service_read_all_connection_info(
             m_path.c_str(),
             [](void *arg, const char *json) {
                 static_cast<std::vector<std::string> *>(arg)->emplace_back(json);
@@ -289,7 +289,7 @@ TEST_F(RingBufferTest, ReadAllEmptyRingBufferFile) {
     ag::PersistentRingBuffer buffer(m_path);
 
     bool called = false;
-    vpn_easy_service_read_all_connection_info(
+    trusttunnel_service_read_all_connection_info(
             m_path.c_str(),
             [](void *arg, const char *) {
                 *static_cast<bool *>(arg) = true;
@@ -302,7 +302,7 @@ TEST_F(RingBufferTest, ReadAllCallbackReceivesNullTerminatedJson) {
     ag::PersistentRingBuffer buffer(m_path);
     ASSERT_TRUE(buffer.append("{\"key\":\"value\"}"));
 
-    vpn_easy_service_read_all_connection_info(
+    trusttunnel_service_read_all_connection_info(
             m_path.c_str(),
             [](void * /*arg*/, const char *json) {
                 // The json pointer must be null-terminated so that strlen works.
@@ -317,7 +317,7 @@ TEST_F(RingBufferTest, ReadAllRecordsPreservedAfterRead) {
     // Reading all connection info should not modify the ring buffer.
     write_records(3);
 
-    vpn_easy_service_read_all_connection_info(m_path.c_str(), [](void *, const char *) {}, nullptr);
+    trusttunnel_service_read_all_connection_info(m_path.c_str(), [](void *, const char *) {}, nullptr);
 
     // The records should still be present after the read.
     ag::PersistentRingBuffer buffer(m_path);

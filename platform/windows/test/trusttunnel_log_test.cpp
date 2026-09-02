@@ -4,13 +4,13 @@
 #include <gtest/gtest.h>
 
 #include "common/logger.h"
-#include "vpn/vpn_easy.h"
-#include "vpn_easy_log.h"
+#include "vpn/trusttunnel.h"
+#include "trusttunnel_log.h"
 
 namespace fs = std::filesystem;
 
 /// Unique temp dir per test with guaranteed cleanup. `TearDown` cleanup is
-/// best-effort: the `VpnEasyApi*` test installs a process-global file logger
+/// best-effort: the `TrusttunnelApi*` test installs a process-global file logger
 /// that keeps a log file open (opened without FILE_SHARE_DELETE) with no
 /// teardown API, so a file may still be open here and is only released at
 /// process exit. A throwing `remove_all` would therefore fail in `TearDown`.
@@ -35,7 +35,7 @@ protected:
 
 TEST_F(WindowsFileLoggingTest, SyncRunsActionExclusively) {
     fs::create_directories(m_dir);
-    ag::vpn_easy::WindowsFileLoggerSync sync;
+    ag::trusttunnel_windows::WindowsFileLoggerSync sync;
     bool ran = false;
     sync.with_exclusive(m_dir, "service", [&] {
         ran = true;
@@ -43,20 +43,20 @@ TEST_F(WindowsFileLoggingTest, SyncRunsActionExclusively) {
     EXPECT_TRUE(ran);
 }
 
-TEST_F(WindowsFileLoggingTest, VpnEasyApiInitExportClear) {
-    vpn_easy_log_init(m_dir.wstring().c_str());
+TEST_F(WindowsFileLoggingTest, TrusttunnelApiInitExportClear) {
+    trusttunnel_log_init(m_dir.wstring().c_str());
     ag::Logger t{"TEST"};
     infolog(t, "client message routed through the adapter file logger");
 
     std::vector<std::wstring> exported;
-    vpn_easy_log_export((m_dir / "export").wstring().c_str(),
+    trusttunnel_log_export((m_dir / "export").wstring().c_str(),
             [](void *arg, const wchar_t *path) {
                 static_cast<std::vector<std::wstring> *>(arg)->emplace_back(path);
             },
             &exported);
     EXPECT_FALSE(exported.empty());
 
-    vpn_easy_log_clear();
+    trusttunnel_log_clear();
     EXPECT_TRUE(fs::exists(m_dir / "client.log"));
     EXPECT_EQ(fs::file_size(m_dir / "client.log"), 0u);
 }

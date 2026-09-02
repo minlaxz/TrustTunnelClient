@@ -1,5 +1,5 @@
-#include "vpn/vpn_easy.h"
-#include "vpn/vpn_easy_service.h"
+#include "vpn/trusttunnel.h"
+#include "vpn/trusttunnel_service.h"
 
 #include <chrono>
 #include <filesystem>
@@ -31,10 +31,10 @@
 #include "vpn/trusttunnel/config.h"
 #include "vpn/trusttunnel/persistent_ring_buffer.h"
 #include "vpn/vpn.h"
-#include "vpn_easy_log.h"
-#include "vpn_easy_pipe.h"
+#include "trusttunnel_log.h"
+#include "trusttunnel_pipe.h"
 
-static ag::Logger g_logger{"VPN_SIMPLE"};
+static ag::Logger g_logger{"TRUSTTUNNEL"};
 
 static void vpn_windows_verify_certificate(ag::VpnVerifyCertificateEvent *event) {
     event->result = !!ag::tls_verify_cert(event->cert, event->chain, nullptr);
@@ -97,13 +97,13 @@ private:
     std::thread m_executor_thread;
 };
 
-struct vpn_easy_s {
+struct trusttunnel_s {
     std::unique_ptr<ag::TrustTunnelClient> client;
     std::unique_ptr<ag::AutoNetworkMonitor> network_monitor;
 };
 
-vpn_easy_t *vpn_easy_start_ex(const char *toml_config, on_state_changed_t state_changed_cb, void *state_changed_cb_arg,
-        on_connection_info_t connection_info_cb, void *connection_info_cb_arg) {
+trusttunnel_t *trusttunnel_start_ex(const char *toml_config, on_state_changed_t state_changed_cb,
+        void *state_changed_cb_arg, on_connection_info_t connection_info_cb, void *connection_info_cb_arg) {
     toml::parse_result parsed_config = toml::parse(toml_config);
     if (!parsed_config) {
         errlog(g_logger, "Failed to parse the TOML config");
@@ -148,7 +148,7 @@ vpn_easy_t *vpn_easy_start_ex(const char *toml_config, on_state_changed_t state_
         };
     }
 
-    auto vpn = std::make_unique<vpn_easy_t>();
+    auto vpn = std::make_unique<trusttunnel_t>();
 
     std::string bound_if;
     if (const auto *tun = std::get_if<ag::TrustTunnelConfig::TunListener>(&trusttunnel_config->listener)) {
@@ -169,7 +169,7 @@ vpn_easy_t *vpn_easy_start_ex(const char *toml_config, on_state_changed_t state_
     return vpn.release();
 }
 
-void vpn_easy_stop_ex(vpn_easy_t *vpn) {
+void trusttunnel_stop_ex(trusttunnel_t *vpn) {
     if (!vpn) {
         return;
     }
@@ -182,7 +182,7 @@ void vpn_easy_stop_ex(vpn_easy_t *vpn) {
     delete vpn;
 }
 
-void vpn_easy_service_read_all_connection_info(
+void trusttunnel_service_read_all_connection_info(
         const wchar_t *ring_buffer_path, on_connection_info_json_t connection_info_cb, void *connection_info_cb_arg) {
     if (!ring_buffer_path || !connection_info_cb) {
         return;
@@ -190,7 +190,7 @@ void vpn_easy_service_read_all_connection_info(
 
     std::filesystem::path fs_path(ring_buffer_path);
 
-    ag::vpn_easy::ScopedFileLock lock(fs_path);
+    ag::trusttunnel_windows::ScopedFileLock lock(fs_path);
     if (!lock) {
         warnlog(g_logger, "Failed to acquire ring buffer lock for '{}'", fs_path.string());
         return;
@@ -209,10 +209,10 @@ void vpn_easy_service_read_all_connection_info(
     }
 }
 
-class VpnEasyManager {
+class TrusttunnelManager {
 public:
-    static VpnEasyManager &instance() {
-        static VpnEasyManager inst;
+    static TrusttunnelManager &instance() {
+        static TrusttunnelManager inst;
         return inst;
     }
 
@@ -230,7 +230,7 @@ public:
                 warnlog(g_logger, "VPN has been already started");
                 return;
             }
-            m_vpn = vpn_easy_start_ex(config.data(), callback, arg, nullptr, nullptr); // blocking
+            m_vpn = trusttunnel_start_ex(config.data(), callback, arg, nullptr, nullptr); // blocking
             if (!m_vpn) {
                 errlog(g_logger, "Failed to start VPN!");
                 return;
@@ -248,28 +248,28 @@ public:
                 return;
             }
             auto *vpn = std::exchange(m_vpn, nullptr);
-            vpn_easy_stop_ex(vpn);
+            trusttunnel_stop_ex(vpn);
         });
     }
 
-    ~VpnEasyManager() {
+    ~TrusttunnelManager() {
         if (m_loop) {
             m_loop->stop();
         }
     }
 
 private:
-    VpnEasyManager() = default;
-    vpn_easy_t *m_vpn = nullptr;
+    TrusttunnelManager() = default;
+    trusttunnel_t *m_vpn = nullptr;
     std::optional<EasyEventLoop> m_loop;
 };
 
-void vpn_easy_start(const char *toml_config, on_state_changed_t state_changed_cb, void *state_changed_cb_arg) {
-    VpnEasyManager::instance().start_async(toml_config, state_changed_cb, state_changed_cb_arg);
+void trusttunnel_start(const char *toml_config, on_state_changed_t state_changed_cb, void *state_changed_cb_arg) {
+    TrusttunnelManager::instance().start_async(toml_config, state_changed_cb, state_changed_cb_arg);
 }
 
-void vpn_easy_stop() {
-    VpnEasyManager::instance().stop_async();
+void trusttunnel_stop() {
+    TrusttunnelManager::instance().stop_async();
 }
 
 static std::wstring escape(const wchar_t *str, const wchar_t *chars_to_escape, wchar_t escape_char) {
@@ -367,7 +367,7 @@ static bool grant_authenticated_users_start_stop(SC_HANDLE svc) {
     return true;
 }
 
-int32_t vpn_easy_service_install(const wchar_t *image_path_, const wchar_t *logs_dir_, const wchar_t *pipe_name_,
+int32_t trusttunnel_service_install(const wchar_t *image_path_, const wchar_t *logs_dir_, const wchar_t *pipe_name_,
         const wchar_t *name, const wchar_t *display_name, const wchar_t *description,
         const wchar_t *ring_buffer_path_) {
     std::wstring image_path = escape(image_path_, L"\"", L'\\');
@@ -380,23 +380,23 @@ int32_t vpn_easy_service_install(const wchar_t *image_path_, const wchar_t *logs
     AutoScHandle scm{OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CREATE_SERVICE)};
     if (!scm) {
         if (ERROR_ACCESS_DENIED == GetLastError()) {
-            return VPN_EASY_SVC_ERR_ACCESS;
+            return TRUSTTUNNEL_SVC_ERR_ACCESS;
         }
         dbglog(g_logger, "OpenSCManagerW: {} ({})", GetLastError(), ag::sys::strerror(GetLastError()));
-        return VPN_EASY_SVC_ERR_OTHER;
+        return TRUSTTUNNEL_SVC_ERR_OTHER;
     }
 
     AutoScHandle svc{CreateServiceW(scm.get(), name, display_name, SERVICE_ALL_ACCESS, SERVICE_WIN32_OWN_PROCESS,
             SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL, cmd.c_str(), nullptr, nullptr, nullptr, nullptr, nullptr)};
     if (!svc) {
         if (ERROR_SERVICE_EXISTS == GetLastError()) {
-            return VPN_EASY_SVC_ERR_SERVICE_EXISTS;
+            return TRUSTTUNNEL_SVC_ERR_SERVICE_EXISTS;
         }
         if (ERROR_ACCESS_DENIED == GetLastError()) {
-            return VPN_EASY_SVC_ERR_ACCESS;
+            return TRUSTTUNNEL_SVC_ERR_ACCESS;
         }
         dbglog(g_logger, "CreateServiceW: {} ({})", GetLastError(), ag::sys::strerror(GetLastError()));
-        return VPN_EASY_SVC_ERR_OTHER;
+        return TRUSTTUNNEL_SVC_ERR_OTHER;
     }
 
     SERVICE_DESCRIPTIONW desc{.lpDescription = const_cast<wchar_t *>(description)};
@@ -404,37 +404,37 @@ int32_t vpn_easy_service_install(const wchar_t *image_path_, const wchar_t *logs
 
     if (!grant_authenticated_users_start_stop(svc.get())) {
         dbglog(g_logger, "Failed to grant start/stop permissions to authenticated users");
-        return VPN_EASY_SVC_ERR_OTHER;
+        return TRUSTTUNNEL_SVC_ERR_OTHER;
     }
 
     if (!StartServiceW(svc.get(), 0, nullptr)) {
         dbglog(g_logger, "StartServiceW: {} ({})", GetLastError(), ag::sys::strerror(GetLastError()));
-        return VPN_EASY_SVC_ERR_OTHER;
+        return TRUSTTUNNEL_SVC_ERR_OTHER;
     }
 
     return 0;
 }
 
-int32_t vpn_easy_service_uninstall(const wchar_t *name) {
+int32_t trusttunnel_service_uninstall(const wchar_t *name) {
     AutoScHandle scm{OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT)};
     if (!scm) {
         if (ERROR_ACCESS_DENIED == GetLastError()) {
-            return VPN_EASY_SVC_ERR_ACCESS;
+            return TRUSTTUNNEL_SVC_ERR_ACCESS;
         }
         dbglog(g_logger, "OpenSCManagerW: {} ({})", GetLastError(), ag::sys::strerror(GetLastError()));
-        return VPN_EASY_SVC_ERR_OTHER;
+        return TRUSTTUNNEL_SVC_ERR_OTHER;
     }
 
     AutoScHandle svc{OpenServiceW(scm.get(), name, STANDARD_RIGHTS_DELETE | SERVICE_STOP)};
     if (!svc) {
         if (ERROR_ACCESS_DENIED == GetLastError()) {
-            return VPN_EASY_SVC_ERR_ACCESS;
+            return TRUSTTUNNEL_SVC_ERR_ACCESS;
         }
         if (ERROR_SERVICE_DOES_NOT_EXIST == GetLastError()) {
-            return VPN_EASY_SVC_ERR_NO_SUCH_SERVICE;
+            return TRUSTTUNNEL_SVC_ERR_NO_SUCH_SERVICE;
         }
         dbglog(g_logger, "OpenServiceW: {} ({})", GetLastError(), ag::sys::strerror(GetLastError()));
-        return VPN_EASY_SVC_ERR_OTHER;
+        return TRUSTTUNNEL_SVC_ERR_OTHER;
     }
 
     SERVICE_STATUS status{};
@@ -444,7 +444,7 @@ int32_t vpn_easy_service_uninstall(const wchar_t *name) {
 
     if (!DeleteService(svc.get())) {
         dbglog(g_logger, "DeleteService: {} ({})", GetLastError(), ag::sys::strerror(GetLastError()));
-        return VPN_EASY_SVC_ERR_OTHER;
+        return TRUSTTUNNEL_SVC_ERR_OTHER;
     }
 
     return 0;
@@ -455,12 +455,12 @@ static constexpr auto SERVICE_POLL_INTERVAL = std::chrono::milliseconds{250};
 
 static struct ServiceControllerState {
     std::mutex mutex;
-    /// The service this controller is bound to. Set by `vpn_easy_service_attach()` and kept until
-    /// `vpn_easy_service_detach()`, independently of whether a pipe session could be established.
+    /// The service this controller is bound to. Set by `trusttunnel_service_attach()` and kept until
+    /// `trusttunnel_service_detach()`, independently of whether a pipe session could be established.
     std::wstring service_name;
     std::wstring pipe_name;
     HANDLE stop_event = nullptr;
-    std::unique_ptr<ag::vpn_easy::PipeClient> pipe_client;
+    std::unique_ptr<ag::trusttunnel_windows::PipeClient> pipe_client;
     std::thread io_thread;
     /// The last state passed to the app, so that the disconnect reported when the pipe dies is
     /// not a repeat. Touched by the IO thread only, and by `close_session()` while it is idle.
@@ -522,7 +522,7 @@ static struct ServiceControllerState {
     }
 } g_svc_state;
 
-/// Client-process file logging state, guarded by `mutex`. Set up by `vpn_easy_log_init()`.
+/// Client-process file logging state, guarded by `mutex`. Set up by `trusttunnel_log_init()`.
 static struct LoggingState {
     std::mutex mutex;
     std::filesystem::path logs_dir;
@@ -532,11 +532,11 @@ static struct LoggingState {
 
 /// Pipe message handler.
 /// Dispatches STATE_CHANGED and CONNECTION_INFO through g_svc_state callbacks.
-static ag::vpn_easy::PipeEndpoint::Handler make_pipe_handler() {
-    return [](VpnEasyServiceMessageType what, ag::Uint8View data) {
+static ag::trusttunnel_windows::PipeEndpoint::Handler make_pipe_handler() {
+    return [](TrusttunnelServiceMessageType what, ag::Uint8View data) {
         auto cbs = g_svc_state.get_callbacks();
         switch (what) {
-        case VPN_EASY_SVC_MSG_STATE_CHANGED: {
+        case TRUSTTUNNEL_SVC_MSG_STATE_CHANGED: {
             if (data.size() < sizeof(uint32_t)) {
                 dbglog(g_logger, "STATE_CHANGED too short: {} bytes", data.size());
                 break;
@@ -550,7 +550,7 @@ static ag::vpn_easy::PipeEndpoint::Handler make_pipe_handler() {
             }
             break;
         }
-        case VPN_EASY_SVC_MSG_CONNECTION_INFO: {
+        case TRUSTTUNNEL_SVC_MSG_CONNECTION_INFO: {
             std::string json(reinterpret_cast<const char *>(data.data()), data.size());
             if (cbs.connection_info_cb) {
                 cbs.connection_info_cb(cbs.connection_info_cb_arg, json.c_str());
@@ -596,34 +596,34 @@ static bool wait_for_service_state(SC_HANDLE svc, DWORD desired_state, std::chro
     }
 }
 
-/// Map a Windows error code from an SCM operation to a VpnEasyServiceError.
+/// Map a Windows error code from an SCM operation to a TrusttunnelServiceError.
 static int32_t map_scm_error(const char *func_name) {
     DWORD err = GetLastError();
     if (err == ERROR_ACCESS_DENIED) {
-        return VPN_EASY_SVC_ERR_ACCESS;
+        return TRUSTTUNNEL_SVC_ERR_ACCESS;
     }
     if (err == ERROR_SERVICE_DOES_NOT_EXIST) {
-        return VPN_EASY_SVC_ERR_NO_SUCH_SERVICE;
+        return TRUSTTUNNEL_SVC_ERR_NO_SUCH_SERVICE;
     }
     dbglog(g_logger, "{}: {} ({})", func_name, err, ag::sys::strerror(err));
-    return VPN_EASY_SVC_ERR_OTHER;
+    return TRUSTTUNNEL_SVC_ERR_OTHER;
 }
 
 static int32_t setup_pipe_client(const wchar_t *pipe_name) {
     g_svc_state.stop_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (!g_svc_state.stop_event) {
         dbglog(g_logger, "CreateEventW: {} ({})", GetLastError(), ag::sys::strerror(GetLastError()));
-        return VPN_EASY_SVC_ERR_OTHER;
+        return TRUSTTUNNEL_SVC_ERR_OTHER;
     }
 
-    g_svc_state.pipe_client = std::make_unique<ag::vpn_easy::PipeClient>(pipe_name, g_svc_state.stop_event,
+    g_svc_state.pipe_client = std::make_unique<ag::trusttunnel_windows::PipeClient>(pipe_name, g_svc_state.stop_event,
             make_pipe_handler(), std::chrono::duration_cast<std::chrono::milliseconds>(SERVICE_OPERATION_TIMEOUT));
 
     g_svc_state.io_thread = std::thread(pipe_io_thread);
 
     if (!g_svc_state.pipe_client->wait_connected()) {
         errlog(g_logger, "PipeClient failed to connect within timeout");
-        return VPN_EASY_SVC_ERR_TIMED_OUT;
+        return TRUSTTUNNEL_SVC_ERR_TIMED_OUT;
     }
 
     return 0;
@@ -662,21 +662,21 @@ static int32_t ensure_live_session(bool start_service) {
     SERVICE_STATUS status{};
     if (!QueryServiceStatus(svc.get(), &status)) {
         dbglog(g_logger, "QueryServiceStatus: {} ({})", GetLastError(), ag::sys::strerror(GetLastError()));
-        return VPN_EASY_SVC_ERR_OTHER;
+        return TRUSTTUNNEL_SVC_ERR_OTHER;
     }
 
     if (status.dwCurrentState != SERVICE_RUNNING) {
         if (!start_service) {
             infolog(g_logger, "Service not running (state: {}), cannot attach", status.dwCurrentState);
-            return VPN_EASY_SVC_ERR_NO_SUCH_SERVICE;
+            return TRUSTTUNNEL_SVC_ERR_NO_SUCH_SERVICE;
         }
         if (!StartServiceW(svc.get(), 0, nullptr) && GetLastError() != ERROR_SERVICE_ALREADY_RUNNING) {
             dbglog(g_logger, "StartServiceW: {} ({})", GetLastError(), ag::sys::strerror(GetLastError()));
-            return VPN_EASY_SVC_ERR_OTHER;
+            return TRUSTTUNNEL_SVC_ERR_OTHER;
         }
         if (!wait_for_service_state(svc.get(), SERVICE_RUNNING, SERVICE_OPERATION_TIMEOUT)) {
             errlog(g_logger, "Service did not reach RUNNING state within timeout");
-            return VPN_EASY_SVC_ERR_TIMED_OUT;
+            return TRUSTTUNNEL_SVC_ERR_TIMED_OUT;
         }
     }
 
@@ -688,7 +688,7 @@ static int32_t ensure_live_session(bool start_service) {
     return 0;
 }
 
-int32_t vpn_easy_service_attach(const wchar_t *service_name, const wchar_t *pipe_name,
+int32_t trusttunnel_service_attach(const wchar_t *service_name, const wchar_t *pipe_name,
         on_state_changed_t state_changed_cb, void *state_changed_cb_arg, on_connection_info_json_t connection_info_cb,
         void *connection_info_cb_arg) {
     std::scoped_lock lock{g_svc_state.mutex};
@@ -698,7 +698,7 @@ int32_t vpn_easy_service_attach(const wchar_t *service_name, const wchar_t *pipe
     }
 
     // Bound even if the service turns out not to be running, so that a later
-    // `vpn_easy_service_start()` has everything it needs to start it.
+    // `trusttunnel_service_start()` has everything it needs to start it.
     g_svc_state.service_name = service_name;
     g_svc_state.pipe_name = pipe_name;
     g_svc_state.set_callbacks({state_changed_cb, state_changed_cb_arg, connection_info_cb, connection_info_cb_arg});
@@ -707,30 +707,30 @@ int32_t vpn_easy_service_attach(const wchar_t *service_name, const wchar_t *pipe
         return err;
     }
 
-    g_svc_state.pipe_client->send(VPN_EASY_SVC_MSG_QUERY_STATE, {});
+    g_svc_state.pipe_client->send(TRUSTTUNNEL_SVC_MSG_QUERY_STATE, {});
 
     return 0;
 }
 
-int32_t vpn_easy_service_start(const char *toml_config) {
+int32_t trusttunnel_service_start(const char *toml_config) {
     std::scoped_lock lock{g_svc_state.mutex};
 
     if (g_svc_state.service_name.empty()) {
-        errlog(g_logger, "Not attached to a service, call vpn_easy_service_attach() first");
-        return VPN_EASY_SVC_ERR_OTHER;
+        errlog(g_logger, "Not attached to a service, call trusttunnel_service_attach() first");
+        return TRUSTTUNNEL_SVC_ERR_OTHER;
     }
 
     toml::parse_result parsed_config = toml::parse(toml_config);
     if (!parsed_config) {
         errlog(g_logger, "Failed to parse the TOML config");
-        return VPN_EASY_SVC_ERR_OTHER;
+        return TRUSTTUNNEL_SVC_ERR_OTHER;
     }
     // Validated here so that an unusable config is a synchronous error rather than a VPN client
     // that the service fails to start without being able to say why.
     auto built_config = ag::TrustTunnelConfig::build_config(parsed_config);
     if (!built_config) {
         errlog(g_logger, "Failed to build the VPN config");
-        return VPN_EASY_SVC_ERR_OTHER;
+        return TRUSTTUNNEL_SVC_ERR_OTHER;
     }
     infolog(g_logger, "Applying log level from config: {}", magic_enum::enum_name(built_config->loglevel));
     ag::Logger::set_log_level(built_config->loglevel);
@@ -740,26 +740,26 @@ int32_t vpn_easy_service_start(const char *toml_config) {
     }
 
     g_svc_state.pipe_client->send(
-            VPN_EASY_SVC_MSG_START, {reinterpret_cast<const uint8_t *>(toml_config), strlen(toml_config)});
+            TRUSTTUNNEL_SVC_MSG_START, {reinterpret_cast<const uint8_t *>(toml_config), strlen(toml_config)});
 
     return 0;
 }
 
-void vpn_easy_service_detach() {
+void trusttunnel_service_detach() {
     std::scoped_lock lock{g_svc_state.mutex};
     g_svc_state.reset();
 }
 
-int32_t vpn_easy_service_stop() {
+int32_t trusttunnel_service_stop() {
     std::scoped_lock lock{g_svc_state.mutex};
     if (!g_svc_state.pipe_client) {
         return 0;
     }
-    g_svc_state.pipe_client->send(VPN_EASY_SVC_MSG_STOP, {});
+    g_svc_state.pipe_client->send(TRUSTTUNNEL_SVC_MSG_STOP, {});
     return 0;
 }
 
-void vpn_easy_log_init(const wchar_t *logs_dir) {
+void trusttunnel_log_init(const wchar_t *logs_dir) {
     if (!logs_dir) {
         return;
     }
@@ -769,13 +769,13 @@ void vpn_easy_log_init(const wchar_t *logs_dir) {
         return;
     }
     g_logging.logs_dir = std::filesystem::path(logs_dir);
-    g_logging.sync = std::make_shared<ag::vpn_easy::WindowsFileLoggerSync>();
-    g_logging.file_logger.emplace(g_logging.logs_dir, ag::vpn_easy::CLIENT_LOG_BASE,
+    g_logging.sync = std::make_shared<ag::trusttunnel_windows::WindowsFileLoggerSync>();
+    g_logging.file_logger.emplace(g_logging.logs_dir, ag::trusttunnel_windows::CLIENT_LOG_BASE,
             ag::FileLogger::DEFAULT_MAX_FILE_SIZE, ag::FileLogger::DEFAULT_ARCHIVE_COUNT, g_logging.sync);
     g_logging.file_logger->install();
 }
 
-void vpn_easy_log_export(const wchar_t *dest_dir, on_log_path_t path_cb, void *path_cb_arg) {
+void trusttunnel_log_export(const wchar_t *dest_dir, on_log_path_t path_cb, void *path_cb_arg) {
     if (!dest_dir || !path_cb) {
         return;
     }
@@ -786,7 +786,7 @@ void vpn_easy_log_export(const wchar_t *dest_dir, on_log_path_t path_cb, void *p
     }
 
     std::filesystem::path dest(dest_dir);
-    for (const char *base : {ag::vpn_easy::CLIENT_LOG_BASE, ag::vpn_easy::SERVICE_LOG_BASE}) {
+    for (const char *base : {ag::trusttunnel_windows::CLIENT_LOG_BASE, ag::trusttunnel_windows::SERVICE_LOG_BASE}) {
         for (const std::filesystem::path &path : ag::FileLogger::snapshot(
                      g_logging.logs_dir, base, dest, ag::FileLogger::DEFAULT_ARCHIVE_COUNT, g_logging.sync.get())) {
             // `path::c_str()` is the native wide string on Windows, delivered without lossy narrowing.
@@ -795,7 +795,7 @@ void vpn_easy_log_export(const wchar_t *dest_dir, on_log_path_t path_cb, void *p
     }
 }
 
-void vpn_easy_log_clear() {
+void trusttunnel_log_clear() {
     std::scoped_lock lock{g_logging.mutex};
     if (!g_logging.file_logger.has_value()) {
         warnlog(g_logger, "File logging is not initialized; nothing to clear");
@@ -808,13 +808,13 @@ void vpn_easy_log_clear() {
     {
         std::scoped_lock svc_lock{g_svc_state.mutex};
         if (g_svc_state.pipe_client) {
-            g_svc_state.pipe_client->send(VPN_EASY_SVC_MSG_CLEAR_LOGS, {});
+            g_svc_state.pipe_client->send(TRUSTTUNNEL_SVC_MSG_CLEAR_LOGS, {});
             return;
         }
     }
 
     // The service is not running; nobody holds its family open, so clear it directly.
-    ag::FileLogger service_logger(g_logging.logs_dir, ag::vpn_easy::SERVICE_LOG_BASE,
+    ag::FileLogger service_logger(g_logging.logs_dir, ag::trusttunnel_windows::SERVICE_LOG_BASE,
             ag::FileLogger::DEFAULT_MAX_FILE_SIZE, ag::FileLogger::DEFAULT_ARCHIVE_COUNT, g_logging.sync);
     service_logger.clear_logs();
 }
