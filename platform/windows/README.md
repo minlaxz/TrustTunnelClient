@@ -16,7 +16,7 @@ cmake --build build --target trusttunnel_windows trusttunnel_service trusttunnel
 
 ## Distribution Package
 
-Architecture names match the `build-windows` release job: `x86_64`, `i686`, `aarch64`.
+Architecture names match the `deploy-windows` release job: `x86_64`, `i686`, `aarch64`.
 
 `-Version` is required — pass the exact version you intend to build.
 
@@ -31,12 +31,12 @@ Architecture names match the `build-windows` release job: `x86_64`, `i686`, `aar
 ./scripts/build_package.ps1 -Version 1.2.3 -Arch i686
 ```
 
-Output: `artifacts/trusttunnel-client-windows-<arch>-<version>.zip`
+Output: `artifacts/trusttunnel-client-windows-<version>-<arch>.zip`
 
 ### Package Structure
 
 ```text
-trusttunnel-client-windows-x86_64-1.1.3/
+trusttunnel-client-windows-1.1.3-x86_64/
 ├── include/vpn/          # trusttunnel.h, trusttunnel_service.h, platform.h
 ├── lib/                  # trusttunnel.lib + CMake config
 ├── bin/                  # trusttunnel.dll, trusttunnel_service.exe, trusttunnel_service_installer.exe, wintun.dll
@@ -63,8 +63,8 @@ endif()
 
 # For Maven: use the GitHub Packages URL below.
 # For local testing: point at the local ZIP instead, e.g.:
-#   set(TRUSTTUNNEL_URL "file:///C:/Dev/vpn-libs/platform/windows/artifacts/trusttunnel-client-windows-${TRUSTTUNNEL_ARCH}-${TRUSTTUNNEL_VERSION}.zip")
-set(TRUSTTUNNEL_URL "https://maven.pkg.github.com/TrustTunnel/TrustTunnelClient/com/adguard/trusttunnel/trusttunnel-client-windows-${TRUSTTUNNEL_ARCH}/${TRUSTTUNNEL_VERSION}/trusttunnel-client-windows-${TRUSTTUNNEL_ARCH}-${TRUSTTUNNEL_VERSION}.zip")
+#   set(TRUSTTUNNEL_URL "file:///C:/Dev/vpn-libs/platform/windows/artifacts/trusttunnel-client-windows-${TRUSTTUNNEL_VERSION}-${TRUSTTUNNEL_ARCH}.zip")
+set(TRUSTTUNNEL_URL "https://maven.pkg.github.com/TrustTunnel/TrustTunnelClient/com/adguard/trusttunnel/trusttunnel-client-windows/${TRUSTTUNNEL_VERSION}/trusttunnel-client-windows-${TRUSTTUNNEL_VERSION}-${TRUSTTUNNEL_ARCH}.zip")
 
 FetchContent_Declare(
     TrustTunnelClientWindows

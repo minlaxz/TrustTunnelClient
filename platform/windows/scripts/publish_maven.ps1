@@ -1,6 +1,6 @@
 # Publish the TrustTunnel Windows adapter package to GitHub Maven Packages.
 #
-# Architecture names match the `build-windows` release job: x86_64, i686, aarch64.
+# Architecture names match the `deploy-windows` release job: x86_64, i686, aarch64.
 # The artifact is published under the same Maven coordinates convention used by
 # the Android/Apple adapters (groupId com.adguard.trusttunnel).
 #
@@ -35,9 +35,10 @@ if (-not $GitHubToken) {
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ArtifactsDir = Join-Path (Split-Path -Parent $ScriptDir) "artifacts"
-$ArtifactId = "trusttunnel-client-windows-$Arch"
+$ArtifactId = "trusttunnel-client-windows"
 $GroupPath = "com/adguard/trusttunnel"
-$ZipFileName = "$ArtifactId-$Version.zip"
+# The arch acts as the Maven classifier: <artifactId>-<version>-<classifier>.zip
+$ZipFileName = "$ArtifactId-$Version-$Arch.zip"
 $ZipFile = Join-Path $ArtifactsDir $ZipFileName
 
 if (-not (Test-Path $ZipFile)) {

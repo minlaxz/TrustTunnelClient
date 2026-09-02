@@ -1,7 +1,7 @@
 # Build and package the TrustTunnel Windows adapter for distribution.
 #
-# Architecture names match the `build-windows` release job
-# (.github/workflows/build-and-deploy-release.yml): x86_64, i686, aarch64.
+# Architecture names match the `deploy-windows` release job
+# (.github/workflows/deploy-windows.yml): x86_64, i686, aarch64.
 #
 # Usage:
 #   .\build_package.ps1 -Version <semver> [-Arch <x86_64|i686|aarch64>] [-BuildType <RelWithDebInfo|Release|Debug>] [-Sign] [-SkipBuild] [-SkipWintun] [-WintunUrl <url>]
@@ -15,7 +15,7 @@
 #   .\build_package.ps1 -Version 1.2.3 -WintunUrl "https://artifactory.example.com/wintun-0.14.1.zip"
 #
 # Output:
-#   artifacts/trusttunnel-client-windows-<arch>-<version>.zip
+#   artifacts/trusttunnel-client-windows-<version>-<arch>.zip
 
 param(
     [Parameter(Mandatory=$true)]
@@ -65,7 +65,7 @@ switch ($Arch) {
 }
 
 $BuildDir = Join-Path (Join-Path $PlatformDir "build") $Arch
-$StagingDir = Join-Path (Join-Path $PlatformDir "staging") "trusttunnel-client-windows-$Arch-$Version"
+$StagingDir = Join-Path (Join-Path $PlatformDir "staging") "trusttunnel-client-windows-$Version-$Arch"
 $ArtifactsDir = Join-Path $PlatformDir "artifacts"
 $WintunExtractDir = Join-Path $PlatformDir "wintun"
 
@@ -223,7 +223,7 @@ Write-Host "--- Creating ZIP archive ---" -ForegroundColor Yellow
 
 New-Item -ItemType Directory -Force -Path $ArtifactsDir | Out-Null
 
-$zipName = "trusttunnel-client-windows-$Arch-$Version.zip"
+$zipName = "trusttunnel-client-windows-$Version-$Arch.zip"
 $zipPath = Join-Path $ArtifactsDir $zipName
 
 # Remove existing zip if present
