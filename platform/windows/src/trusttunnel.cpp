@@ -24,6 +24,8 @@
 #include "common/utils.h"
 #include "net/tls.h"
 #include "scoped_file_lock.h"
+#include "trusttunnel_log.h"
+#include "trusttunnel_pipe.h"
 #include "vpn/event_loop.h"
 #include "vpn/platform.h"
 #include "vpn/trusttunnel/auto_network_monitor.h"
@@ -31,8 +33,6 @@
 #include "vpn/trusttunnel/config.h"
 #include "vpn/trusttunnel/persistent_ring_buffer.h"
 #include "vpn/vpn.h"
-#include "trusttunnel_log.h"
-#include "trusttunnel_pipe.h"
 
 static ag::Logger g_logger{"TRUSTTUNNEL"};
 

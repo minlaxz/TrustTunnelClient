@@ -4,8 +4,8 @@
 #include <gtest/gtest.h>
 
 #include "common/logger.h"
-#include "vpn/trusttunnel.h"
 #include "trusttunnel_log.h"
+#include "vpn/trusttunnel.h"
 
 namespace fs = std::filesystem;
 

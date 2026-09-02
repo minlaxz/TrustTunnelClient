@@ -16,12 +16,12 @@
 
 #include "common/system_error.h"
 #include "scoped_file_lock.h"
+#include "trusttunnel_log.h"
+#include "trusttunnel_pipe.h"
 #include "vpn/file_logger.h"
 #include "vpn/trusttunnel/connection_info.h"
 #include "vpn/trusttunnel/persistent_ring_buffer.h"
 #include "vpn/vpn.h"
-#include "trusttunnel_log.h"
-#include "trusttunnel_pipe.h"
 
 using ag::trusttunnel_windows::PipeServer;
 

@@ -1,5 +1,5 @@
-#include "vpn/vpn.h"
 #include "vpn/trusttunnel.h"
+#include "vpn/vpn.h"
 
 #include <cstdio>
 #include <fstream>

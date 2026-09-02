@@ -1,7 +1,7 @@
 #include "native_vpn_impl.h"
-#include "vpn/vpn.h"
 #include "vpn/trusttunnel.h"
 #include "vpn/trusttunnel_service.h"
+#include "vpn/vpn.h"
 
 #include <filesystem>
 
