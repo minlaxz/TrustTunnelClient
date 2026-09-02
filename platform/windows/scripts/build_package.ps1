@@ -138,6 +138,7 @@ cmake -S "$PlatformDir" -B "$BuildDir" -G Ninja ^
     -DCMAKE_BUILD_TYPE=$BuildType ^
     -DCMAKE_C_COMPILER=cl.exe ^
     -DCMAKE_CXX_COMPILER=cl.exe ^
+    -DTT_CLIENT_VERSION=$Version ^
     -DCMAKE_INSTALL_PREFIX="$StagingDir"
 if %errorlevel% neq 0 exit /b %errorlevel%
 cmake --build "$BuildDir" --target trusttunnel_windows trusttunnel_service trusttunnel_service_installer

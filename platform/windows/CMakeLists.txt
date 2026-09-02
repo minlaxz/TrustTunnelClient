@@ -28,6 +28,22 @@ if (NOT TARGET vpnlibs_trusttunnel)
     add_subdirectory(${ROOT_DIR} ${CMAKE_BINARY_DIR}/trusttunnel)
 endif ()
 
+include(${ROOT_DIR}/cmake/version.cmake)
+if (WIN32)
+    configure_file(
+            ${CMAKE_CURRENT_SOURCE_DIR}/resources/trusttunnel_windows.rc.in
+            ${CMAKE_CURRENT_BINARY_DIR}/gen/trusttunnel_windows.rc
+            @ONLY)
+    configure_file(
+            ${CMAKE_CURRENT_SOURCE_DIR}/resources/trusttunnel_service.rc.in
+            ${CMAKE_CURRENT_BINARY_DIR}/gen/trusttunnel_service.rc
+            @ONLY)
+    configure_file(
+            ${CMAKE_CURRENT_SOURCE_DIR}/resources/trusttunnel_service_installer.rc.in
+            ${CMAKE_CURRENT_BINARY_DIR}/gen/trusttunnel_service_installer.rc
+            @ONLY)
+endif ()
+
 add_library(trusttunnel_windows_a STATIC src/trusttunnel.cpp src/trusttunnel_pipe.cpp)
 target_include_directories(trusttunnel_windows_a PUBLIC include)
 target_link_libraries(trusttunnel_windows_a vpnlibs_trusttunnel)
@@ -44,6 +60,13 @@ target_link_libraries(trusttunnel_service trusttunnel_windows_a)
 
 add_executable(trusttunnel_service_installer src/trusttunnel_service_installer.cpp)
 target_link_libraries(trusttunnel_service_installer trusttunnel_windows_a)
+
+# Compile the rendered version resources into the shipped binaries.
+if (WIN32)
+    target_sources(trusttunnel_windows PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/gen/trusttunnel_windows.rc)
+    target_sources(trusttunnel_service PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/gen/trusttunnel_service.rc)
+    target_sources(trusttunnel_service_installer PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/gen/trusttunnel_service_installer.rc)
+endif ()
 
 add_executable(trusttunnel_service_test test/trusttunnel_service_test.cpp)
 target_link_libraries(trusttunnel_service_test trusttunnel_windows_a)
