@@ -170,6 +170,8 @@ static std::optional<TrustTunnelConfig::Location> build_endpoint(const toml::tab
         }
     }
 
+    location.direct_dns_via_tunnel = config["direct_dns_via_tunnel"].value_or(false);
+
     return location;
 }
 

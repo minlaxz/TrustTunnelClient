@@ -10,6 +10,7 @@ internal struct Endpoint: Codable {
     let addresses: [String]
     let dns_upstreams: [String]?
     let direct_dns_upstreams: [String]?
+    let direct_dns_via_tunnel: Bool?
     let name: String
 }
 
