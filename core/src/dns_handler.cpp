@@ -776,7 +776,9 @@ bool ag::DnsHandler::start_system_dns_proxy() {
 }
 
 // Like `start_system_dns_proxy()`, MUST leave the client operable on failure: it is restarted on
-// DNS/network change. Hostname-based upstreams (DoH/DoT) bootstrap through the system DNS servers.
+// DNS/network change. Hostname-based upstreams (DoH/DoT) bootstrap through the system DNS servers,
+// or, with `direct_dns_via_tunnel`, through DnsLibs' default bootstraps over the SOCKS outbound proxy
+// (the system resolvers are usually unreachable from inside the tunnel).
 bool ag::DnsHandler::start_direct_dns_proxy() {
     m_upstream_conn_id_by_direct_client_id.clear();
     m_direct_client.reset();
@@ -789,28 +791,45 @@ bool ag::DnsHandler::start_direct_dns_proxy() {
         return true;
     }
 
+    std::optional<SocketAddress> socks_listener_address;
     std::vector<std::string> bootstraps;
-    SystemDnsServers servers = dns_manager_get_system_servers(ServerUpstream::vpn->parameters.network_manager->dns);
-    for (const SystemDnsServer &server : servers.main) {
-        if (SocketAddress address{server.address}; address.valid()) {
-            bootstraps.emplace_back(server.address);
+    if (m_parameters.direct_dns_via_tunnel) {
+        if (m_parameters.dns_proxy_listener_address.is_any()
+                || !m_parameters.dns_proxy_listener_address.is_loopback()) {
+            log_handler(this, err,
+                    "DNS proxy listener address is invalid: {}, direct DNS via tunnel unavailable, "
+                    "excluded queries use the system DNS proxy",
+                    m_parameters.dns_proxy_listener_address);
+            return false;
         }
-    }
-    bootstraps.insert(bootstraps.end(), std::make_move_iterator(servers.bootstrap.begin()),
-            std::make_move_iterator(servers.bootstrap.end()));
-    if (bootstraps.empty()) {
-        // Same fallback as `start_system_dns_proxy()` when the system reports no resolvers.
-        for (std::string_view address : AG_UNFILTERED_DNS_IPS_V4) {
-            bootstraps.emplace_back(address);
+        socks_listener_address = m_parameters.dns_proxy_listener_address;
+    } else {
+        SystemDnsServers servers
+                = dns_manager_get_system_servers(ServerUpstream::vpn->parameters.network_manager->dns);
+        for (const SystemDnsServer &server : servers.main) {
+            if (SocketAddress address{server.address}; address.valid()) {
+                bootstraps.emplace_back(server.address);
+            }
         }
-        for (std::string_view address : AG_UNFILTERED_DNS_IPS_V6) {
-            bootstraps.emplace_back(address);
+        bootstraps.insert(bootstraps.end(), std::make_move_iterator(servers.bootstrap.begin()),
+                std::make_move_iterator(servers.bootstrap.end()));
+        if (bootstraps.empty()) {
+            // Same fallback as `start_system_dns_proxy()` when the system reports no resolvers.
+            for (std::string_view address : AG_UNFILTERED_DNS_IPS_V4) {
+                bootstraps.emplace_back(address);
+            }
+            for (std::string_view address : AG_UNFILTERED_DNS_IPS_V6) {
+                bootstraps.emplace_back(address);
+            }
         }
     }
 
     m_direct_dns_proxy = std::make_unique<DnsProxyAccessor>(DnsProxyAccessor::Parameters{
             .upstreams = m_parameters.direct_dns_upstreams, // Copy: restarted on network change.
             .bootstraps = std::move(bootstraps),
+            .socks_listener_address = socks_listener_address,
+            .socks_listener_username = m_parameters.dns_proxy_listener_username,
+            .socks_listener_password = m_parameters.dns_proxy_listener_password,
             .cert_verify_handler = m_parameters.cert_verify_handler,
 #if defined(__APPLE__) && TARGET_OS_IPHONE
             .qos_settings = {.qos_class = ServerUpstream::vpn->parameters.qos_settings.qos_class,
@@ -826,7 +845,8 @@ bool ag::DnsHandler::start_direct_dns_proxy() {
 
     SocketAddress tcp_addr = m_direct_dns_proxy->get_listen_address(utils::TP_TCP);
     SocketAddress udp_addr = m_direct_dns_proxy->get_listen_address(utils::TP_UDP);
-    log_handler(this, info, "Direct DNS proxy listening on {}/TCP, {}/UDP", tcp_addr, udp_addr);
+    log_handler(this, info, "Direct DNS proxy listening on {}/TCP, {}/UDP{}", tcp_addr, udp_addr,
+            socks_listener_address.has_value() ? " (via tunnel)" : "");
 
     m_direct_client = std::make_unique<DnsClient>(DnsClientParameters{
             .ev_loop = ServerUpstream::vpn->parameters.ev_loop,

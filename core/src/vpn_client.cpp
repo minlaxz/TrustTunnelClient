@@ -87,6 +87,12 @@ static constexpr FsmTransitionEntry TRANSITION_TABLE[] = {
 
 static VpnError start_dns_proxy_listener(VpnClient *self);
 
+// The SOCKS listener is the outbound proxy for the user DNS proxy and, with `direct_dns_via_tunnel`,
+// for the direct DNS proxy too.
+static bool dns_proxy_listener_needed(const VpnListenerConfig &config) {
+    return config.dns_upstreams.size > 0 || (config.direct_dns_via_tunnel && config.direct_dns_upstreams.size > 0);
+}
+
 static void release_deferred_task(VpnClient *self, TaskId task) {
     if (auto n = self->deferred_tasks.extract(event_loop::make_auto_id(task)); !n.empty()) {
         n.value().release();
@@ -126,7 +132,7 @@ static void endpoint_connector_handler(void *arg, EndpointConnectorResult result
         self->pending_error = *e;
     } else {
         self->endpoint_upstream = std::move(std::get<std::unique_ptr<ServerUpstream>>(result));
-        if (self->listener_config.dns_upstreams.size > 0 && self->dns_proxy_listener == nullptr) {
+        if (dns_proxy_listener_needed(self->listener_config) && self->dns_proxy_listener == nullptr) {
             VpnError error = start_dns_proxy_listener(self);
             if (error.code != VPN_EC_NOERROR) {
                 self->pending_error = error;
@@ -496,7 +502,7 @@ VpnError VpnClient::listen(std::unique_ptr<ClientListener> listener, const VpnLi
     if (this->fsm.get_state() == vpn_client::S_CONNECTED) {
         this->tunnel->on_exclusions_updated();
 
-        if (this->listener_config.dns_upstreams.size > 0 && this->dns_proxy_listener == nullptr) {
+        if (dns_proxy_listener_needed(this->listener_config) && this->dns_proxy_listener == nullptr) {
             error = start_dns_proxy_listener(this);
             if (error.code != VPN_EC_NOERROR) {
                 goto fail;

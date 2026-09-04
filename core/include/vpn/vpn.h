@@ -150,6 +150,15 @@ typedef struct {
      */
     AG_ARRAY_OF(const char *) direct_dns_upstreams;
     /**
+     * If `true`, `direct_dns_upstreams` are reached through the VPN endpoint instead of the
+     * device's own network. Only the DNS query changes path: connections to the answered
+     * addresses still bypass the VPN. Ignored when `direct_dns_upstreams` is empty. While the
+     * endpoint is not connected, queries fall back to the system DNS servers as usual.
+     *
+     * The default value is `false`.
+     */
+    bool direct_dns_via_tunnel;
+    /**
      * If `true`, DNS queries for excluded (or, in selective mode, not included) domains
      * will be sent to their original destinations through the bypass upstream, instead
      * of being redirected to the system DNS proxy.

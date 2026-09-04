@@ -56,7 +56,10 @@
   User-configured DNS upstreams are specified by `VpnListenerConfig::dns_upstreams`.
   Optional resolvers for EXCLUDED domain names are specified by `VpnListenerConfig::direct_dns_upstreams`:
   when set, a "direct" DNS proxy built from them replaces the system DNS proxy in step 2 below
-  (dialled from the device's own network, like the system DNS proxy).
+  (dialled from the device's own network, like the system DNS proxy). With
+  `VpnListenerConfig::direct_dns_via_tunnel` the direct DNS proxy instead uses the same SOCKS5 outbound
+  proxy as the user DNS proxy in step 4, so its queries travel through ServerUpstream while the
+  connections that follow still bypass.
 
   In general:
 
@@ -235,6 +238,11 @@ struct DnsHandlerParameters {
      * Used for excluded domains instead of the system DNS proxy. Dialled directly, not through the VPN.
      */
     std::vector<DnsProxyAccessor::Upstream> direct_dns_upstreams;
+    /**
+     * If `true`, the direct DNS proxy uses `dns_proxy_listener_address` as its outbound proxy
+     * (queries go through the VPN endpoint). Ignored when `direct_dns_upstreams` is empty.
+     */
+    bool direct_dns_via_tunnel = false;
     /** Cert verify callback for the DNS proxies. */
     CertVerifyHandler cert_verify_handler = {};
     /**
@@ -260,6 +268,11 @@ public:
     bool update_parameters(DnsHandlerParameters parameters);
 
     void on_network_change();
+
+    /** The direct DNS proxy, or `nullptr` when `direct_dns_upstreams` is empty or it failed to start. */
+    [[nodiscard]] const DnsProxyAccessor *direct_dns_proxy() const {
+        return m_direct_dns_proxy.get();
+    }
 
 private:
     DnsHandlerParameters m_parameters;

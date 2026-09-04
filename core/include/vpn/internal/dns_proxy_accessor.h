@@ -79,6 +79,13 @@ public:
      */
     [[nodiscard]] const SocketAddress &get_listen_address(utils::TransportProtocol protocol) const;
 
+    /**
+     * Get the parameters the proxy was created with
+     */
+    [[nodiscard]] const Parameters &parameters() const {
+        return m_parameters;
+    }
+
 private:
     std::unique_ptr<dns::DnsProxy> m_dns_proxy;
     Parameters m_parameters = {};

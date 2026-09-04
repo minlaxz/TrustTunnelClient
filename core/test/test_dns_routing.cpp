@@ -15,6 +15,7 @@
 
 #include "mock_dns_server.h"
 
+#include <dns_handler.h>
 #include <socks_listener.h>
 
 using namespace ag; // NOLINT(google-build-using-namespace)
@@ -648,6 +649,11 @@ struct DnsRoutingAllProxies : public ::testing::Test {
         return false;
     }
 
+    /** Value of `VpnListenerConfig::direct_dns_via_tunnel`. */
+    virtual bool direct_dns_via_tunnel() {
+        return false;
+    }
+
     DeclPtr<VpnEventLoop, &vpn_event_loop_destroy> ev_loop{vpn_event_loop_create()};
     VpnClient vpn;
     DeclPtr<VpnNetworkManager, &vpn_network_manager_destroy> network_manager{vpn_network_manager_get()};
@@ -764,6 +770,7 @@ struct DnsRoutingAllProxies : public ::testing::Test {
         VpnListenerConfig listener_config{
                 .dns_upstreams = {.data = &upstream, .size = 1},
                 .direct_dns_upstreams = {.data = &direct_upstream, .size = direct_dns_enabled() ? 1u : 0u},
+                .direct_dns_via_tunnel = direct_dns_via_tunnel(),
         };
         vpn.listener_config = vpn_listener_config_clone(&listener_config);
         vpn.parameters.cert_verify_handler = {
@@ -851,6 +858,13 @@ struct DnsRoutingAllProxies : public ::testing::Test {
         ASSERT_EQ(read.result, int(read.length));
     }
 
+    // Take the endpoint upstream down the way `VpnClient` does on disconnect. Kill switch stays off.
+    void disconnect_endpoint() {
+        vpn.tunnel->on_before_endpoint_disconnect(redirect_upstream.get());
+        vpn.tunnel->upstream_handler(redirect_upstream, SERVER_EVENT_SESSION_CLOSED, nullptr);
+        vpn.tunnel->on_after_endpoint_disconnect(redirect_upstream.get());
+    }
+
     void TearDown() override {
         direct_server.reset();
         system_ipv6_server.reset();
@@ -912,6 +926,79 @@ TEST_F(DnsRoutingAllProxiesDirect, IncludedGoesUser) {
     ASSERT_EQ(0, user_unexpected);
     ASSERT_EQ(0, direct_unexpected);
     ASSERT_EQ(0, system_unexpected);
+}
+
+// Direct upstreams set, `direct_dns_via_tunnel` false: the direct proxy dials without an outbound proxy.
+TEST_F(DnsRoutingAllProxiesDirect, DirectProxyHasNoOutboundProxy) {
+    const DnsProxyAccessor *proxy = vpn.tunnel->dns_handler->direct_dns_proxy();
+    ASSERT_NE(nullptr, proxy);
+    ASSERT_FALSE(proxy->parameters().socks_listener_address.has_value());
+}
+
+// Same fixture with `VpnListenerConfig::direct_dns_via_tunnel` set.
+struct DnsRoutingAllProxiesDirectViaTunnel : public DnsRoutingAllProxiesDirect {
+    bool direct_dns_via_tunnel() override {
+        return true;
+    }
+};
+
+// Flag true: the direct proxy's outbound proxy is the tunnel's SOCKS listener, and an excluded query
+// still reaches the direct mock. (DnsLibs dials loopback peers directly, so the mock cannot observe the
+// SOCKS hop itself; the outbound-proxy setting is the observable seam.)
+TEST_F(DnsRoutingAllProxiesDirectViaTunnel, ExcludedGoesDirectViaTunnel) {
+    const DnsProxyAccessor *proxy = vpn.tunnel->dns_handler->direct_dns_proxy();
+    ASSERT_NE(nullptr, proxy);
+    ASSERT_TRUE(proxy->parameters().socks_listener_address.has_value());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    ASSERT_EQ(((SocksListener *) vpn.dns_proxy_listener.get())->get_listen_address(),
+            *proxy->parameters().socks_listener_address);
+
+    vpn.update_exclusions(VPN_MODE_GENERAL, "*.example.org");
+    direct_server->expect({
+            .request = MockDnsServer::Request{.tcp = false, .qtype = 1, .qname = "excluded.example.org."},
+            .response = MockDnsServer::Response{.rcode = 0, .answer = {"excluded.example.org. 60 IN A 1.1.1.1"}},
+    });
+    ASSERT_NO_FATAL_FAILURE(query(SocketAddress("8.8.8.8:53"), "excluded.example.org."));
+    ASSERT_EQ(1, direct_complete);
+    ASSERT_EQ(0, direct_unexpected);
+    ASSERT_EQ(0, system_unexpected);
+    ASSERT_EQ(0, user_unexpected);
+}
+
+// Flag true, endpoint upstream disconnected: the query falls back to the system mock, same as tunnel-side DNS.
+TEST_F(DnsRoutingAllProxiesDirectViaTunnel, NotConnectedGoesSystem) {
+    disconnect_endpoint();
+    vpn.update_exclusions(VPN_MODE_GENERAL, "*.example.org");
+    system_server->expect({
+            .request = MockDnsServer::Request{.tcp = false, .qtype = 1, .qname = "excluded.example.org."},
+            .response = MockDnsServer::Response{.rcode = 0, .answer = {"excluded.example.org. 60 IN A 1.1.1.4"}},
+    });
+    ASSERT_NO_FATAL_FAILURE(query(SocketAddress("8.8.8.8:53"), "excluded.example.org."));
+    ASSERT_EQ(1, system_complete);
+    ASSERT_EQ(0, system_unexpected);
+    ASSERT_EQ(0, direct_unexpected);
+    ASSERT_EQ(0, user_unexpected);
+}
+
+// Flag true but no direct upstreams: behaves exactly like flag false with an empty list.
+struct DnsRoutingAllProxiesViaTunnelNoList : public DnsRoutingAllProxies {
+    bool direct_dns_via_tunnel() override {
+        return true;
+    }
+};
+
+TEST_F(DnsRoutingAllProxiesViaTunnelNoList, ExcludedGoesSystem) {
+    ASSERT_EQ(nullptr, vpn.tunnel->dns_handler->direct_dns_proxy());
+    vpn.update_exclusions(VPN_MODE_GENERAL, "*.example.org");
+    system_server->expect({
+            .request = MockDnsServer::Request{.tcp = false, .qtype = 1, .qname = "excluded.example.org."},
+            .response = MockDnsServer::Response{.rcode = 0, .answer = {"excluded.example.org. 60 IN A 1.1.1.5"}},
+    });
+    ASSERT_NO_FATAL_FAILURE(query(SocketAddress("8.8.8.8:53"), "excluded.example.org."));
+    ASSERT_EQ(1, system_complete);
+    ASSERT_EQ(0, system_unexpected);
+    ASSERT_EQ(0, direct_unexpected);
+    ASSERT_EQ(0, user_unexpected);
 }
 
 // Excluded domain, direct upstreams empty: answered by the system mock, direct mock never contacted.
