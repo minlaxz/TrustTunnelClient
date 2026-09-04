@@ -127,6 +127,7 @@ The configuration file uses TOML format. Below are all available settings.
 | `anti_dpi` | bool | `false` | Enable anti-DPI (Deep Packet Inspection) measures |
 | `dns_upstreams` | array[string] | `[]` | DNS resolvers for queries routed through VPN. If empty, AdGuard DNS unfiltered is used |
 | `direct_dns_upstreams` | array[string] | `[]` | DNS resolvers for queries of excluded (bypassed) domains, reached directly from the device's network, not through VPN. Same formats as `dns_upstreams`. If empty, the system DNS servers are used. |
+| `direct_dns_via_tunnel` | bool | `false` | Reach `direct_dns_upstreams` through the VPN endpoint instead of the device's network, for networks that block public resolvers. Only the DNS query changes path; connections to the answered addresses still bypass VPN. Ignored when `direct_dns_upstreams` is empty. While the endpoint is disconnected, queries fall back to the system DNS servers. |
 
 ### TUN Listener Settings (`[listener.tun]`)
 
@@ -202,6 +203,7 @@ skip_verification = false
 certificate = ""
 dns_upstreams = ["tls://1.1.1.1"]
 direct_dns_upstreams = []
+direct_dns_via_tunnel = false
 upstream_protocol = "http2"
 anti_dpi = false
 

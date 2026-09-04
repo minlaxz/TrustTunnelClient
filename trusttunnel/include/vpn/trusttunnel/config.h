@@ -30,6 +30,7 @@ struct TrustTunnelConfig {
         std::string client_random_mask;
         std::optional<std::vector<std::string>> dns_upstreams;
         std::vector<std::string> direct_dns_upstreams;
+        bool direct_dns_via_tunnel = false;
         bool skip_verification = false;
         bool anti_dpi = false;
         bool has_ipv6 = false;

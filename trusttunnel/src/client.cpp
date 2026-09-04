@@ -169,6 +169,7 @@ Error<TrustTunnelClient::ConnectResultError> TrustTunnelClient::vpn_runner(Liste
             .dns_upstreams = {.data = dns_upstreams.data(), .size = uint32_t(dns_upstreams.size())},
             .direct_dns_upstreams = {.data = direct_dns_upstreams.data(),
                     .size = uint32_t(direct_dns_upstreams.size())},
+            .direct_dns_via_tunnel = m_config.location.direct_dns_via_tunnel,
     };
     VpnError error = vpn_listen(m_vpn, listener, &listener_config);
     if (error.code != 0) {

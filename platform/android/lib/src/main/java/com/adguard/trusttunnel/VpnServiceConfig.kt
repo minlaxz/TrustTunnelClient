@@ -25,7 +25,9 @@ class Endpoint (
     @SerialName("dns_upstreams")
     val dnsUpstreams: List<String> = emptyList(),
     @SerialName("direct_dns_upstreams")
-    val directDnsUpstreams: List<String> = emptyList()
+    val directDnsUpstreams: List<String> = emptyList(),
+    @SerialName("direct_dns_via_tunnel")
+    val directDnsViaTunnel: Boolean = false
 )
 
 @Serializable
