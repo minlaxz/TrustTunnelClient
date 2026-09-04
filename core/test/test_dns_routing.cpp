@@ -635,9 +635,18 @@ struct DnsRoutingAllProxies : public ::testing::Test {
     int system_ipv6_complete = 0;
     int system_ipv6_unexpected = 0;
 
+    int direct_complete = 0;
+    int direct_unexpected = 0;
+
     std::unique_ptr<MockDnsServer> user_server = std::make_unique<MockDnsServer>();
     std::unique_ptr<MockDnsServer> system_server = std::make_unique<MockDnsServer>();
     std::unique_ptr<MockDnsServer> system_ipv6_server = std::make_unique<MockDnsServer>();
+    std::unique_ptr<MockDnsServer> direct_server = std::make_unique<MockDnsServer>();
+
+    /** When `true`, `direct_server` is configured as `VpnListenerConfig::direct_dns_upstreams`. */
+    virtual bool direct_dns_enabled() {
+        return false;
+    }
 
     DeclPtr<VpnEventLoop, &vpn_event_loop_destroy> ev_loop{vpn_event_loop_create()};
     VpnClient vpn;
@@ -735,7 +744,27 @@ struct DnsRoutingAllProxies : public ::testing::Test {
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
         std::string user_server_addr_str = user_server_addr->str();
         const char *upstream = user_server_addr_str.c_str();
-        VpnListenerConfig listener_config{.dns_upstreams = {.data = &upstream, .size = 1}};
+
+        auto direct_server_addr = direct_server->start(
+                SocketAddress("127.0.0.1"), this->ev_loop.get(), this->network_manager->socket,
+                [this] {
+                    this->schedule_exit(DEFAULT_EVENT_LOOP_EXIT_TIMEOUT);
+                    ++this->direct_complete;
+                },
+                [this](std::optional<MockDnsServer::Request>, MockDnsServer::Request) {
+                    this->schedule_exit(DEFAULT_EVENT_LOOP_EXIT_TIMEOUT);
+                    ++this->direct_unexpected;
+                    return std::nullopt;
+                });
+        ASSERT_TRUE(direct_server_addr.has_value());
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+        std::string direct_server_addr_str = direct_server_addr->str();
+        const char *direct_upstream = direct_server_addr_str.c_str();
+
+        VpnListenerConfig listener_config{
+                .dns_upstreams = {.data = &upstream, .size = 1},
+                .direct_dns_upstreams = {.data = &direct_upstream, .size = direct_dns_enabled() ? 1u : 0u},
+        };
         vpn.listener_config = vpn_listener_config_clone(&listener_config);
         vpn.parameters.cert_verify_handler = {
                 .func = [](const char *, const sockaddr *, const CertVerifyCtx &, void *) {
@@ -823,13 +852,81 @@ struct DnsRoutingAllProxies : public ::testing::Test {
     }
 
     void TearDown() override {
+        direct_server.reset();
         system_ipv6_server.reset();
         system_server.reset();
         user_server.reset();
         vpn.tunnel->deinit();
         vpn.dns_proxy_listener->deinit();
     }
+
+    // Raise a UDP query for `qname` over the tunnel to `dst` and run the loop until a mock answers or times out.
+    void query(const TunnelAddress &dst, const std::string &qname) {
+        SocketAddress src("127.0.0.1:50001");
+        ClientConnectRequest udp_event{
+                .id = this->vpn.listener_conn_id_generator.get(),
+                .protocol = IPPROTO_UDP,
+                .src = &src,
+                .dst = &dst,
+                .app_name = "TestAppName",
+        };
+        ASSERT_NO_FATAL_FAILURE(raise_and_complete(udp_event));
+        ASSERT_NO_FATAL_FAILURE(accept_and_send(udp_event, qname, LDNS_RR_TYPE_A));
+        vpn_event_loop_exit(this->ev_loop.get(), DEFAULT_TIMEOUT);
+        vpn_event_loop_run(this->ev_loop.get());
+        vpn_event_loop_finalize_exit(this->ev_loop.get());
+    }
 };
+
+// Same fixture with `VpnListenerConfig::direct_dns_upstreams` pointing at `direct_server`.
+struct DnsRoutingAllProxiesDirect : public DnsRoutingAllProxies {
+    bool direct_dns_enabled() override {
+        return true;
+    }
+};
+
+// Excluded domain, direct upstreams set: answered by the direct mock, not the system mock.
+TEST_F(DnsRoutingAllProxiesDirect, ExcludedGoesDirect) {
+    vpn.update_exclusions(VPN_MODE_GENERAL, "*.example.org");
+    direct_server->expect({
+            .request = MockDnsServer::Request{.tcp = false, .qtype = 1, .qname = "excluded.example.org."},
+            .response = MockDnsServer::Response{.rcode = 0, .answer = {"excluded.example.org. 60 IN A 1.1.1.1"}},
+    });
+    ASSERT_NO_FATAL_FAILURE(query(SocketAddress("8.8.8.8:53"), "excluded.example.org."));
+    ASSERT_EQ(1, direct_complete);
+    ASSERT_EQ(0, direct_unexpected);
+    ASSERT_EQ(0, system_unexpected);
+    ASSERT_EQ(0, system_ipv6_unexpected);
+    ASSERT_EQ(0, user_unexpected);
+}
+
+// Included domain, direct upstreams set: still answered by the user (tunnel-side) mock.
+TEST_F(DnsRoutingAllProxiesDirect, IncludedGoesUser) {
+    vpn.update_exclusions(VPN_MODE_GENERAL, "*.example.org");
+    user_server->expect({
+            .request = MockDnsServer::Request{.tcp = false, .qtype = 1, .qname = "included.example.com."},
+            .response = MockDnsServer::Response{.rcode = 0, .answer = {"included.example.com. 60 IN A 1.1.1.2"}},
+    });
+    ASSERT_NO_FATAL_FAILURE(query(SocketAddress("8.8.8.8:53"), "included.example.com."));
+    ASSERT_EQ(1, user_complete);
+    ASSERT_EQ(0, user_unexpected);
+    ASSERT_EQ(0, direct_unexpected);
+    ASSERT_EQ(0, system_unexpected);
+}
+
+// Excluded domain, direct upstreams empty: answered by the system mock, direct mock never contacted.
+TEST_F(DnsRoutingAllProxies, ExcludedGoesSystemWithoutDirect) {
+    vpn.update_exclusions(VPN_MODE_GENERAL, "*.example.org");
+    system_server->expect({
+            .request = MockDnsServer::Request{.tcp = false, .qtype = 1, .qname = "excluded.example.org."},
+            .response = MockDnsServer::Response{.rcode = 0, .answer = {"excluded.example.org. 60 IN A 1.1.1.3"}},
+    });
+    ASSERT_NO_FATAL_FAILURE(query(SocketAddress("8.8.8.8:53"), "excluded.example.org."));
+    ASSERT_EQ(1, system_complete);
+    ASSERT_EQ(0, system_unexpected);
+    ASSERT_EQ(0, direct_unexpected);
+    ASSERT_EQ(0, user_unexpected);
+}
 
 TEST_F(DnsRoutingAllProxies, IpVersionsSystem) {
     TunnelAddress dst = SocketAddress("8.8.8.8:53");
