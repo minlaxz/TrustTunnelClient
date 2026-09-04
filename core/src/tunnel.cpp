@@ -512,10 +512,11 @@ static void report_connection_info(const Tunnel *self, VpnConnection *conn, cons
 
 static std::optional<DnsHandlerParameters> make_dns_handler_parameters(Tunnel *self) {
     DnsHandlerParameters parameters{
+            .direct_dns_via_tunnel = self->vpn->listener_config.direct_dns_via_tunnel,
             .cert_verify_handler = self->vpn->parameters.cert_verify_handler,
             .alt_exclusions_route = self->vpn->listener_config.dns_alt_exclusions_route,
     };
-    if (self->vpn->listener_config.dns_upstreams.size && self->vpn->dns_proxy_listener) {
+    if (self->vpn->dns_proxy_listener) {
         for (size_t i = 0; i < self->vpn->listener_config.dns_upstreams.size; ++i) {
             parameters.dns_upstreams.emplace_back(
                     DnsProxyAccessor::Upstream{.address = self->vpn->listener_config.dns_upstreams.data[i]});
