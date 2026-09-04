@@ -1,0 +1,114 @@
+# TwoHops fork: Linux C++ unit tests for the twohops branch.
+#
+# The upstream test workflows (run-tests-public.yml etc.) guard every job with
+# `github.repository == 'TrustTunnel/TrustTunnelClient'`, so they skip on the
+# fork. This is a deliberate copy of the Linux job from run-tests-public.yml
+# with the guard pointed at the fork, and without lint or the macOS/Windows
+# jobs. Kept separate so upstream merges never conflict. See minlaxz/TwoHops#119.
+name: Test (twohops)
+
+env:
+  CONAN_VER: 2.12
+  # The workflow bootstraps Conan itself, so `make` must not do it again.
+  SKIP_BOOTSTRAP: 1
+
+on:
+  push:
+    branches:
+      - twohops
+  pull_request:
+    branches:
+      - twohops
+  workflow_dispatch:
+
+jobs:
+  linux-unit-tests:
+    runs-on: ubuntu-latest
+    if: github.repository == 'minlaxz/TrustTunnelClient'
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    env:
+      LLVM_MAJOR_VER: 21
+      PRESET: clang-relwithdebinfo-sanitizer
+      # GitHub-hosted runners have no IPv6 connectivity.
+      CMAKE_ARGS: >-
+        -DIPV6_UNAVAILABLE=ON
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+          pip install -r requirements.txt
+          pip install conan~=$CONAN_VER
+          ## Install LLVM
+          curl -O https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh $LLVM_MAJOR_VER
+          rm ./llvm.sh
+          sudo apt-get install -y libc++-${LLVM_MAJOR_VER}-dev libclang-rt-${LLVM_MAJOR_VER}-dev
+          echo "/usr/lib/llvm-$LLVM_MAJOR_VER/bin" >> $GITHUB_PATH
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-test-ccache
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      # Own key rather than publish-android-twohops.yml's: that workflow runs
+      # on tag refs, and GitHub cache isolation makes tag caches invisible to
+      # branch and PR runs, so they cannot be shared here. Also, Conan
+      # packages are per-profile (Android vs host), so an exact-key hit would
+      # skip the save below and host builds would never be cached.
+      - name: Conan cache
+        uses: actions/cache@v4
+        id: conan-cache
+        with:
+          path: ~/.conan2/
+          key: ${{ runner.os }}-test-conan2-${{ hashFiles('conanfile.py') }}
+          restore-keys: ${{ runner.os }}-test-conan2-
+
+      - name: Bootstrap conan
+        if: steps.conan-cache.outputs.cache-hit != 'true'
+        run: ./scripts/bootstrap_conan_deps.py
+
+      - name: Run cmake
+        run: make setup_cmake
+
+      # Save whatever Conan built even if a later step fails, so a retry is fast.
+      - name: Save conan cache
+        uses: actions/cache/save@v4
+        if: always() && steps.conan-cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/.conan2/
+          key: ${{ runner.os }}-test-conan2-${{ hashFiles('conanfile.py') }}
+
+      - name: Run C++ unit tests
+        run: make test-cpp
+
+      - name: Upload JUnit report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-linux
+          path: cmake-build-clang-relwithdebinfo-sanitizer/junit.xml
+          if-no-files-found: ignore
