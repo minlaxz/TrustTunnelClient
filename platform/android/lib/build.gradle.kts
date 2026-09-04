@@ -96,14 +96,14 @@ afterEvaluate {
         publications {
             create<MavenPublication>("release") {
                 from(components["release"])
-                groupId = "com.adguard.trusttunnel"
+                groupId = "io.github.minlaxz"
                 artifactId = "trusttunnel-client-android"
             }
         }
         repositories {
             maven {
                 name = "GitHubPackages"
-                url = uri("https://maven.pkg.github.com/TrustTunnel/TrustTunnelClient")
+                url = uri("https://maven.pkg.github.com/minlaxz/TrustTunnelClient")
                 credentials {
                     username = providers.gradleProperty("gpr.user")
                         .orElse(providers.environmentVariable("USERNAME"))

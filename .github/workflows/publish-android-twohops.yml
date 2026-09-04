@@ -1,0 +1,136 @@
+# TwoHops fork: build the Android adapter AAR and publish it to this
+# repository's GitHub Packages. Triggered by pushing a tag of the form
+# <upstream>-twohops.<n>, e.g. 1.1.5-twohops.0. The tag is the Maven version.
+#
+# Toolchain per platform/android/README.md: Python, CMake, Conan 2, Go, Ninja,
+# Android SDK + NDK, plus Rust with cargo-ndk for trusttunnel_deeplink_ffi.
+name: Publish Android library (twohops)
+
+on:
+  push:
+    tags:
+      - '*-twohops.*'
+  workflow_dispatch:
+
+env:
+  CONAN_VER: 2.12
+  RUST_CHANNEL: 1.95
+  NDK_VERSION: 29.0.14206865
+
+jobs:
+  publish-android:
+    runs-on: ubuntu-latest
+    if: github.repository == 'minlaxz/TrustTunnelClient'
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version from tag
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION="$(git describe --tags --match 'v*' | sed -e 's/^v//')-twohops.dev"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "TT_CLIENT_VERSION=${VERSION}" >> "$GITHUB_ENV"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install Rust ${{ env.RUST_CHANNEL }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: trusttunnel
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Install packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+          pip install -r requirements.txt
+          pip install conan~=$CONAN_VER
+          cmake --version
+          ninja --version
+
+      - name: Install Android NDK
+        run: |
+          echo y | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION" "platforms;android-35" > /dev/null
+
+      - name: Conan cache
+        uses: actions/cache@v4
+        id: conan-cache
+        with:
+          path: ~/.conan2/
+          key: ${{ runner.os }}-android-conan2-${{ hashFiles('conanfile.py') }}
+          restore-keys: ${{ runner.os }}-android-conan2-
+
+      - name: Bootstrap conan
+        if: steps.conan-cache.outputs.cache-hit != 'true'
+        run: ./scripts/bootstrap_conan_deps.py
+
+      - name: Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('platform/android/**/*.gradle*', 'platform/android/gradle/**') }}
+          restore-keys: ${{ runner.os }}-gradle-
+
+      - name: Build Android library
+        run: |
+          cd platform/android
+          touch local.properties
+          echo "cmake.dir=$(dirname $(dirname $(which cmake)))" >> local.properties
+          ./gradlew --no-daemon :lib:assembleRelease
+
+      # Save whatever Conan built even if a later step fails, so a retry is fast.
+      - name: Save conan cache
+        uses: actions/cache/save@v4
+        if: always() && steps.conan-cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/.conan2/
+          key: ${{ runner.os }}-android-conan2-${{ hashFiles('conanfile.py') }}
+
+      - name: Publish to GitHub Packages
+        env:
+          USERNAME: ${{ github.actor }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd platform/android
+          ./gradlew --no-daemon :lib:publishReleasePublicationToGitHubPackagesRepository
+
+      - name: Upload AAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: trusttunnel-client-android-${{ steps.version.outputs.version }}
+          path: platform/android/lib/build/outputs/aar/*.aar
