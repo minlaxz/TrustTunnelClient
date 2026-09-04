@@ -269,9 +269,18 @@ public:
 
     void on_network_change();
 
-    /** The direct DNS proxy, or `nullptr` when `direct_dns_upstreams` is empty or it failed to start. */
+    /**
+     * The direct DNS proxy, or `nullptr` when `direct_dns_upstreams` is empty or it failed to start.
+     * Exposed for tests: DnsLibs dials loopback mocks directly, so the outbound-proxy setting is the
+     * only observable evidence of `direct_dns_via_tunnel`.
+     */
     [[nodiscard]] const DnsProxyAccessor *direct_dns_proxy() const {
         return m_direct_dns_proxy.get();
+    }
+
+    /** The parameters currently applied. Exposed for tests. */
+    [[nodiscard]] const DnsHandlerParameters &parameters() const {
+        return m_parameters;
     }
 
 private:
@@ -301,6 +310,7 @@ private:
     bool start_dns_proxy();
     bool start_system_dns_proxy();
     bool start_direct_dns_proxy();
+    [[nodiscard]] bool has_valid_dns_proxy_listener_address() const;
 
     static void client_handler(void *arg, DnsClientEvent what, void *data);
     static void system_client_handler(void *arg, DnsClientEvent what, void *data);

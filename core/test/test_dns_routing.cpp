@@ -980,6 +980,26 @@ TEST_F(DnsRoutingAllProxiesDirectViaTunnel, NotConnectedGoesSystem) {
     ASSERT_EQ(0, user_unexpected);
 }
 
+// Flag true before the SOCKS listener exists (listen() ahead of the endpoint connection): parameters
+// still apply, the direct proxy stays off, and the query falls back to the system mock.
+TEST_F(DnsRoutingAllProxiesDirectViaTunnel, NoListenerAddressYetGoesSystem) {
+    DnsHandlerParameters parameters = vpn.tunnel->dns_handler->parameters();
+    parameters.dns_proxy_listener_address = {};
+    ASSERT_TRUE(vpn.tunnel->dns_handler->update_parameters(std::move(parameters)));
+    ASSERT_EQ(nullptr, vpn.tunnel->dns_handler->direct_dns_proxy());
+
+    vpn.update_exclusions(VPN_MODE_GENERAL, "*.example.org");
+    system_server->expect({
+            .request = MockDnsServer::Request{.tcp = false, .qtype = 1, .qname = "excluded.example.org."},
+            .response = MockDnsServer::Response{.rcode = 0, .answer = {"excluded.example.org. 60 IN A 1.1.1.6"}},
+    });
+    ASSERT_NO_FATAL_FAILURE(query(SocketAddress("8.8.8.8:53"), "excluded.example.org."));
+    ASSERT_EQ(1, system_complete);
+    ASSERT_EQ(0, system_unexpected);
+    ASSERT_EQ(0, direct_unexpected);
+    ASSERT_EQ(0, user_unexpected);
+}
+
 // Flag true but no direct upstreams: behaves exactly like flag false with an empty list.
 struct DnsRoutingAllProxiesViaTunnelNoList : public DnsRoutingAllProxies {
     bool direct_dns_via_tunnel() override {
