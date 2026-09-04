@@ -54,6 +54,9 @@
   listener that is configured as the DNS proxy's outbound proxy: `VpnClient::dns_proxy_listener`.
 
   User-configured DNS upstreams are specified by `VpnListenerConfig::dns_upstreams`.
+  Optional resolvers for EXCLUDED domain names are specified by `VpnListenerConfig::direct_dns_upstreams`:
+  when set, a "direct" DNS proxy built from them replaces the system DNS proxy in step 2 below
+  (dialled from the device's own network, like the system DNS proxy).
 
   In general:
 
@@ -227,6 +230,11 @@ struct DnsHandlerParameters {
     std::string dns_proxy_listener_password;
     /** User-provided DNS server addresses specified in `ag::VpnListenerConfig::dns_upstreams`. */
     std::vector<DnsProxyAccessor::Upstream> dns_upstreams;
+    /**
+     * User-provided DNS server addresses specified in `ag::VpnListenerConfig::direct_dns_upstreams`.
+     * Used for excluded domains instead of the system DNS proxy. Dialled directly, not through the VPN.
+     */
+    std::vector<DnsProxyAccessor::Upstream> direct_dns_upstreams;
     /** Cert verify callback for the DNS proxies. */
     CertVerifyHandler cert_verify_handler = {};
     /**
@@ -267,16 +275,24 @@ private:
     std::unique_ptr<DnsProxyAccessor> m_system_dns_proxy_ipv6;
     std::unique_ptr<DnsClient> m_system_client_ipv6;
 
+    std::unique_ptr<DnsProxyAccessor> m_direct_dns_proxy;
+    std::unique_ptr<DnsClient> m_direct_client;
+
     std::unordered_map<uint16_t, uint64_t> m_upstream_conn_id_by_client_id;
     std::unordered_map<uint16_t, uint64_t> m_upstream_conn_id_by_system_client_id;
     std::unordered_map<uint16_t, uint64_t> m_upstream_conn_id_by_system_client_ipv6_id;
+    std::unordered_map<uint16_t, uint64_t> m_upstream_conn_id_by_direct_client_id;
+
+    enum class Proxy { USER, SYSTEM, DIRECT };
 
     bool start_dns_proxy();
     bool start_system_dns_proxy();
+    bool start_direct_dns_proxy();
 
     static void client_handler(void *arg, DnsClientEvent what, void *data);
     static void system_client_handler(void *arg, DnsClientEvent what, void *data);
     static void system_client_ipv6_handler(void *arg, DnsClientEvent what, void *data);
+    static void direct_client_handler(void *arg, DnsClientEvent what, void *data);
 
     void client_handler(std::unordered_map<uint16_t, uint64_t> &map, DnsClientEvent what, void *data);
 
@@ -284,7 +300,7 @@ private:
 
     void on_upstream_connection_closed(uint64_t upstream_conn_id) override;
 
-    void send_request(bool system_proxy, bool ipv6, bool tcp, uint64_t upstream_conn_id, U8View message);
+    void send_request(Proxy proxy, bool ipv6, bool tcp, uint64_t upstream_conn_id, U8View message);
     void send_request_as_listener(const ConnectionInfo &info, U8View message, bool force_bypass);
 
     void shutdown();
