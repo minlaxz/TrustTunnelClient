@@ -126,6 +126,7 @@ The configuration file uses TOML format. Below are all available settings.
 | `upstream_protocol` | string | `"http2"` | Protocol: `http2` or `http3` |
 | `anti_dpi` | bool | `false` | Enable anti-DPI (Deep Packet Inspection) measures |
 | `dns_upstreams` | array[string] | `[]` | DNS resolvers for queries routed through VPN. If empty, AdGuard DNS unfiltered is used |
+| `direct_dns_upstreams` | array[string] | `[]` | DNS resolvers for queries of excluded (bypassed) domains, reached directly from the device's network, not through VPN. Same formats as `dns_upstreams`. If empty, the system DNS servers are used. |
 
 ### TUN Listener Settings (`[listener.tun]`)
 
@@ -167,7 +168,7 @@ The `exclusions` array supports the following formats:
 
 ### DNS Upstreams Syntax
 
-The `dns_upstreams` array supports the following formats:
+The `dns_upstreams` and `direct_dns_upstreams` arrays support the following formats:
 
 - **Plain DNS**: `8.8.8.8:53`
 - **DNS over TCP**: `tcp://8.8.8.8:53`
@@ -200,6 +201,7 @@ client_random = ""
 skip_verification = false
 certificate = ""
 dns_upstreams = ["tls://1.1.1.1"]
+direct_dns_upstreams = []
 upstream_protocol = "http2"
 anti_dpi = false
 
