@@ -161,6 +161,15 @@ static std::optional<TrustTunnelConfig::Location> build_endpoint(const toml::tab
         location.dns_upstreams = std::move(dns_upstreams);
     }
 
+    if (const auto *x = config["direct_dns_upstreams"].as_array()) {
+        location.direct_dns_upstreams.reserve(x->size());
+        for (const auto &a : *x) {
+            if (std::optional addr = a.value<std::string_view>(); addr.has_value() && !addr->empty()) {
+                location.direct_dns_upstreams.emplace_back(addr.value());
+            }
+        }
+    }
+
     return location;
 }
 

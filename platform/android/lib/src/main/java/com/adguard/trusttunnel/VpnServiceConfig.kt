@@ -23,7 +23,9 @@ class Listener (
 @Serializable
 class Endpoint (
     @SerialName("dns_upstreams")
-    val dnsUpstreams: List<String> = emptyList()
+    val dnsUpstreams: List<String> = emptyList(),
+    @SerialName("direct_dns_upstreams")
+    val directDnsUpstreams: List<String> = emptyList()
 )
 
 @Serializable

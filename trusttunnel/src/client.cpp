@@ -159,8 +159,16 @@ Error<TrustTunnelClient::ConnectResultError> TrustTunnelClient::vpn_runner(Liste
         dns_upstreams.emplace_back(upstream.c_str());
     }
 
+    std::vector<const char *> direct_dns_upstreams;
+    direct_dns_upstreams.reserve(m_config.location.direct_dns_upstreams.size());
+    for (const std::string &upstream : m_config.location.direct_dns_upstreams) {
+        direct_dns_upstreams.emplace_back(upstream.c_str());
+    }
+
     VpnListenerConfig listener_config = {
             .dns_upstreams = {.data = dns_upstreams.data(), .size = uint32_t(dns_upstreams.size())},
+            .direct_dns_upstreams = {.data = direct_dns_upstreams.data(),
+                    .size = uint32_t(direct_dns_upstreams.size())},
     };
     VpnError error = vpn_listen(m_vpn, listener, &listener_config);
     if (error.code != 0) {
