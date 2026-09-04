@@ -466,6 +466,12 @@ VpnListenerConfig vpn_listener_config_clone(const VpnListenerConfig *config) {
         out.dns_upstreams.data[i] = safe_strdup(config->dns_upstreams.data[i]);
     }
 
+    out.direct_dns_upstreams.data = new const char *[config->direct_dns_upstreams.size];
+    out.direct_dns_upstreams.size = config->direct_dns_upstreams.size;
+    for (size_t i = 0; i < out.direct_dns_upstreams.size; ++i) {
+        out.direct_dns_upstreams.data[i] = safe_strdup(config->direct_dns_upstreams.data[i]);
+    }
+
     return out;
 }
 
@@ -474,6 +480,10 @@ void vpn_listener_config_destroy(VpnListenerConfig *config) {
         free((char *) config->dns_upstreams.data[i]); // NOLINT(cppcoreguidelines-no-malloc,hicpp-no-malloc)
     }
     delete[] config->dns_upstreams.data;
+    for (size_t i = 0; i < config->direct_dns_upstreams.size; ++i) {
+        free((char *) config->direct_dns_upstreams.data[i]); // NOLINT(cppcoreguidelines-no-malloc,hicpp-no-malloc)
+    }
+    delete[] config->direct_dns_upstreams.data;
 
     *config = {};
 }

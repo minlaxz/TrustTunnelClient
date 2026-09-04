@@ -586,6 +586,11 @@ bool ag::DnsHandler::initialize(VpnClient *vpn, ServerHandler upstream_handler, 
         return false;
     }
 
+    if (!start_direct_dns_proxy()) {
+        shutdown();
+        return false;
+    }
+
     m_dns_change_subscription_id = dns_manager_subscribe_servers_change(
             vpn->parameters.network_manager->dns, vpn->parameters.ev_loop, on_dns_change, this);
     return true;
@@ -598,7 +603,9 @@ bool ag::DnsHandler::update_parameters(DnsHandlerParameters parameters) {
     }
     log_handler(this, dbg, "Restarting DNS proxy with new parameters");
     m_parameters = std::move(parameters);
-    return start_dns_proxy();
+    bool user_ok = start_dns_proxy();
+    bool direct_ok = start_direct_dns_proxy();
+    return user_ok && direct_ok;
 }
 
 bool ag::DnsHandler::start_dns_proxy() {
@@ -768,9 +775,86 @@ bool ag::DnsHandler::start_system_dns_proxy() {
     return true;
 }
 
+// Like `start_system_dns_proxy()`, MUST leave the client operable on failure: it is restarted on
+// DNS/network change. Hostname-based upstreams (DoH/DoT) bootstrap through the system DNS servers.
+bool ag::DnsHandler::start_direct_dns_proxy() {
+    m_upstream_conn_id_by_direct_client_id.clear();
+    m_direct_client.reset();
+    if (m_direct_dns_proxy) {
+        m_direct_dns_proxy->stop();
+        m_direct_dns_proxy.reset();
+    }
+
+    if (m_parameters.direct_dns_upstreams.empty()) {
+        return true;
+    }
+
+    std::vector<std::string> bootstraps;
+    SystemDnsServers servers = dns_manager_get_system_servers(ServerUpstream::vpn->parameters.network_manager->dns);
+    for (const SystemDnsServer &server : servers.main) {
+        if (SocketAddress address{server.address}; address.valid()) {
+            bootstraps.emplace_back(server.address);
+        }
+    }
+    bootstraps.insert(bootstraps.end(), std::make_move_iterator(servers.bootstrap.begin()),
+            std::make_move_iterator(servers.bootstrap.end()));
+    if (bootstraps.empty()) {
+        // Same fallback as `start_system_dns_proxy()` when the system reports no resolvers.
+        for (std::string_view address : AG_UNFILTERED_DNS_IPS_V4) {
+            bootstraps.emplace_back(address);
+        }
+        for (std::string_view address : AG_UNFILTERED_DNS_IPS_V6) {
+            bootstraps.emplace_back(address);
+        }
+    }
+
+    m_direct_dns_proxy = std::make_unique<DnsProxyAccessor>(DnsProxyAccessor::Parameters{
+            .upstreams = m_parameters.direct_dns_upstreams, // Copy: restarted on network change.
+            .bootstraps = std::move(bootstraps),
+            .cert_verify_handler = m_parameters.cert_verify_handler,
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+            .qos_settings = {.qos_class = ServerUpstream::vpn->parameters.qos_settings.qos_class,
+                    .relative_priority = ServerUpstream::vpn->parameters.qos_settings.relative_priority}
+#endif // __APPLE__ && TARGET_OS_IPHONE
+    });
+
+    if (!m_direct_dns_proxy->start()) {
+        m_direct_dns_proxy.reset();
+        log_handler(this, err, "Failed to start direct DNS proxy, excluded queries use the system DNS proxy");
+        return false;
+    }
+
+    SocketAddress tcp_addr = m_direct_dns_proxy->get_listen_address(utils::TP_TCP);
+    SocketAddress udp_addr = m_direct_dns_proxy->get_listen_address(utils::TP_UDP);
+    log_handler(this, info, "Direct DNS proxy listening on {}/TCP, {}/UDP", tcp_addr, udp_addr);
+
+    m_direct_client = std::make_unique<DnsClient>(DnsClientParameters{
+            .ev_loop = ServerUpstream::vpn->parameters.ev_loop,
+            .socket_manager = ServerUpstream::vpn->parameters.network_manager->socket,
+            .handler = {.func = direct_client_handler, .arg = this},
+            .tcp_server_address = tcp_addr,
+            .udp_server_address = udp_addr,
+            .request_timeout = DNS_CLIENT_TIMEOUT,
+            .tag = "direct-dns-proxy",
+    });
+
+    if (!m_direct_client->init()) {
+        m_direct_client.reset();
+        log_handler(this, err, "Failed to initialize direct DNS client");
+        return false;
+    }
+
+    return true;
+}
+
 void ag::DnsHandler::client_handler(void *arg, DnsClientEvent what, void *data) {
     auto *self = (DnsHandler *) arg;
     self->client_handler(self->m_upstream_conn_id_by_client_id, what, data);
+}
+
+void ag::DnsHandler::direct_client_handler(void *arg, DnsClientEvent what, void *data) {
+    auto *self = (DnsHandler *) arg;
+    self->client_handler(self->m_upstream_conn_id_by_direct_client_id, what, data);
 }
 
 void ag::DnsHandler::system_client_handler(void *arg, DnsClientEvent what, void *data) {
@@ -795,6 +879,7 @@ void ag::DnsHandler::client_handler(std::unordered_map<uint16_t, uint64_t> &map,
             log_handler(this, info, "{}DNS proxy request id={} failed",
                     &map == &m_upstream_conn_id_by_system_client_id                ? "System "
                             : &map == &m_upstream_conn_id_by_system_client_ipv6_id ? "System (IPv6) "
+                            : &map == &m_upstream_conn_id_by_direct_client_id      ? "Direct "
                                                                                    : "",
                     event->id);
         }
@@ -810,35 +895,43 @@ void ag::DnsHandler::client_handler(std::unordered_map<uint16_t, uint64_t> &map,
 // Ignore proxy start error on DNS/network change: we might succeed and recover on next change.
 void ag::DnsHandler::on_dns_change(void *arg) {
     auto *self = (DnsHandler *) arg;
-    log_handler(self, info, "Restarting system DNS proxy");
+    log_handler(self, info, "Restarting system and direct DNS proxies");
     self->start_system_dns_proxy();
+    self->start_direct_dns_proxy();
 }
 
 void ag::DnsHandler::on_network_change() {
     // System proxy has to be restarted with a new `outbound_interface`.
     // Assume `vpn_network_manager_set_outbound_interface` has been called before `vpn_notify_network_change`.
-    log_handler(this, info, "Restarting system DNS proxy");
+    log_handler(this, info, "Restarting system and direct DNS proxies");
     start_system_dns_proxy();
+    start_direct_dns_proxy();
 }
 
 void ag::DnsHandler::on_upstream_connection_closed(uint64_t upstream_conn_id) {
     close_listener_connection_by_upstream_conn_id(upstream_conn_id);
 }
 
-void ag::DnsHandler::send_request(bool system_proxy, bool ipv6, bool tcp, uint64_t upstream_conn_id, U8View message) {
-    auto &client = !system_proxy ? m_client : (ipv6 && m_system_client_ipv6) ? m_system_client_ipv6 : m_system_client;
+void ag::DnsHandler::send_request(Proxy proxy, bool ipv6, bool tcp, uint64_t upstream_conn_id, U8View message) {
+    bool system_ipv6 = proxy == Proxy::SYSTEM && ipv6 && m_system_client_ipv6;
+    auto &client = proxy == Proxy::USER ? m_client
+            : proxy == Proxy::DIRECT    ? m_direct_client
+            : system_ipv6               ? m_system_client_ipv6
+                                        : m_system_client;
+    std::string_view proxy_name = proxy == Proxy::USER ? "" : proxy == Proxy::DIRECT ? "direct " : "system ";
     if (!client) {
-        log_handler(this, dbg, "No DNS client, system: {}, ipv6: {}", system_proxy, ipv6);
+        log_handler(this, dbg, "No {}DNS client, ipv6: {}", proxy_name, ipv6);
         return;
     }
     auto request_id = client->send(message, tcp);
     if (!request_id.has_value()) {
-        log_handler(this, info, "Dropping DNS request: failed to send to {}DNS proxy", system_proxy ? "system " : "");
+        log_handler(this, info, "Dropping DNS request: failed to send to {}DNS proxy", proxy_name);
         return;
     }
-    auto &map = !system_proxy                ? m_upstream_conn_id_by_client_id
-            : (ipv6 && m_system_client_ipv6) ? m_upstream_conn_id_by_system_client_ipv6_id
-                                             : m_upstream_conn_id_by_system_client_id;
+    auto &map = proxy == Proxy::USER ? m_upstream_conn_id_by_client_id
+            : proxy == Proxy::DIRECT ? m_upstream_conn_id_by_direct_client_id
+            : system_ipv6            ? m_upstream_conn_id_by_system_client_ipv6_id
+                                     : m_upstream_conn_id_by_system_client_id;
     auto [_, placed] = map.emplace(*request_id, upstream_conn_id);
     assert_use(placed);
 }
@@ -858,9 +951,14 @@ void ag::DnsHandler::shutdown() {
     m_client.reset();
     m_system_client.reset();
     m_system_client_ipv6.reset();
+    m_direct_client.reset();
     if (m_dns_proxy) {
         m_dns_proxy->stop();
         m_dns_proxy.reset();
+    }
+    if (m_direct_dns_proxy) {
+        m_direct_dns_proxy->stop();
+        m_direct_dns_proxy.reset();
     }
     if (m_system_dns_proxy) {
         m_system_dns_proxy->stop();
@@ -900,7 +998,7 @@ void ag::DnsHandler::on_dns_request(const ConnectionInfo &info, U8View message) 
                 return;
             }
             log_handler(this, dbg, "{} qname: {} -> system DNS proxy (not connected)", info, request.name);
-            send_request(/*system proxy*/ true, ipv6, tcp, info.upstream_conn_id, message);
+            send_request(Proxy::SYSTEM, ipv6, tcp, info.upstream_conn_id, message);
             return;
         }
         if (vpn_network_manager_check_app_request_domain(request.name.c_str())) {
@@ -911,7 +1009,7 @@ void ag::DnsHandler::on_dns_request(const ConnectionInfo &info, U8View message) 
                 return;
             }
             log_handler(this, dbg, "{} qname: {} -> system DNS proxy (not connected, app request)", info, request.name);
-            send_request(/*system proxy*/ true, ipv6, tcp, info.upstream_conn_id, message);
+            send_request(Proxy::SYSTEM, ipv6, tcp, info.upstream_conn_id, message);
             return;
         }
         log_handler(this, dbg, "{} qname: {} dropped: not connected, kill switch enabled", info, request.name);
@@ -924,10 +1022,13 @@ void ag::DnsHandler::on_dns_request(const ConnectionInfo &info, U8View message) 
 
     if (included && m_client) {
         log_handler(this, dbg, "{} qname: {} -> DNS proxy", info, request.name);
-        send_request(/*system proxy*/ false, ipv6, tcp, info.upstream_conn_id, message);
+        send_request(Proxy::USER, ipv6, tcp, info.upstream_conn_id, message);
+    } else if (!included && m_direct_client) {
+        log_handler(this, dbg, "{} qname: {} -> direct DNS proxy", info, request.name);
+        send_request(Proxy::DIRECT, ipv6, tcp, info.upstream_conn_id, message);
     } else if (!included && !m_parameters.alt_exclusions_route) {
         log_handler(this, dbg, "{} qname: {} -> system DNS proxy", info, request.name);
-        send_request(/*system proxy*/ true, ipv6, tcp, info.upstream_conn_id, message);
+        send_request(Proxy::SYSTEM, ipv6, tcp, info.upstream_conn_id, message);
     } else {
         bool bypass = !included;
         log_handler(this, dbg, "{} qname: {} -> {}{}", info, request.name, tunnel_addr_to_str(&info.addrs->dst),

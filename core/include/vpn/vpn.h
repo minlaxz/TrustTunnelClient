@@ -142,6 +142,14 @@ typedef struct {
      */
     AG_ARRAY_OF(const char *) dns_upstreams;
     /**
+     * Optional.
+     * DNS resolvers for queries of excluded (or, in selective mode, not included) domains.
+     * Same address kinds as `dns_upstreams`. Dialled directly from the device's own network,
+     * not through the VPN endpoint. If empty, the system DNS servers are used.
+     * When set, takes precedence over `dns_alt_exclusions_route` for excluded domains.
+     */
+    AG_ARRAY_OF(const char *) direct_dns_upstreams;
+    /**
      * If `true`, DNS queries for excluded (or, in selective mode, not included) domains
      * will be sent to their original destinations through the bypass upstream, instead
      * of being redirected to the system DNS proxy.

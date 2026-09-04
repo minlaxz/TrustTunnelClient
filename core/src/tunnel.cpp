@@ -525,6 +525,10 @@ static std::optional<DnsHandlerParameters> make_dns_handler_parameters(Tunnel *s
         parameters.dns_proxy_listener_username = std::string(vpn_client::DNS_PROXY_LISTENER_USERNAME);
         parameters.dns_proxy_listener_password = self->vpn->dns_proxy_listener_password;
     }
+    for (size_t i = 0; i < self->vpn->listener_config.direct_dns_upstreams.size; ++i) {
+        parameters.direct_dns_upstreams.emplace_back(
+                DnsProxyAccessor::Upstream{.address = self->vpn->listener_config.direct_dns_upstreams.data[i]});
+    }
     return parameters;
 }
 
