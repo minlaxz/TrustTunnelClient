@@ -150,6 +150,14 @@ typedef struct {
      */
     AG_ARRAY_OF(const char *) direct_dns_upstreams;
     /**
+     * If `true`, DNS queries for excluded (or, in selective mode, not included) domains
+     * will be sent to their original destinations through the bypass upstream, instead
+     * of being redirected to the system DNS proxy.
+     *
+     * The default value is `false`.
+     */
+    bool dns_alt_exclusions_route;
+    /**
      * If `true`, `direct_dns_upstreams` are reached through the VPN endpoint instead of the
      * device's own network. Only the DNS query changes path: connections to the answered
      * addresses still bypass the VPN. Ignored when `direct_dns_upstreams` is empty. While the
@@ -158,14 +166,6 @@ typedef struct {
      * The default value is `false`.
      */
     bool direct_dns_via_tunnel;
-    /**
-     * If `true`, DNS queries for excluded (or, in selective mode, not included) domains
-     * will be sent to their original destinations through the bypass upstream, instead
-     * of being redirected to the system DNS proxy.
-     *
-     * The default value is `false`.
-     */
-    bool dns_alt_exclusions_route;
 } VpnListenerConfig;
 
 typedef struct {

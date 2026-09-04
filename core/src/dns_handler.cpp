@@ -621,7 +621,7 @@ bool ag::DnsHandler::start_dns_proxy() {
         return true;
     }
 
-    if (m_parameters.dns_proxy_listener_address.is_any() || !m_parameters.dns_proxy_listener_address.is_loopback()) {
+    if (!has_valid_dns_proxy_listener_address()) {
         log_handler(this, warn, "DNS proxy listener address is invalid: {}", m_parameters.dns_proxy_listener_address);
         return false;
     }
@@ -775,10 +775,14 @@ bool ag::DnsHandler::start_system_dns_proxy() {
     return true;
 }
 
+bool ag::DnsHandler::has_valid_dns_proxy_listener_address() const {
+    return !m_parameters.dns_proxy_listener_address.is_any() && m_parameters.dns_proxy_listener_address.is_loopback();
+}
+
 // Like `start_system_dns_proxy()`, MUST leave the client operable on failure: it is restarted on
 // DNS/network change. Hostname-based upstreams (DoH/DoT) bootstrap through the system DNS servers,
-// or, with `direct_dns_via_tunnel`, through DnsLibs' default bootstraps over the SOCKS outbound proxy
-// (the system resolvers are usually unreachable from inside the tunnel).
+// or, with `direct_dns_via_tunnel`, through `DnsProxyAccessor`'s AdGuard bootstraps over the SOCKS
+// outbound proxy (the system resolvers are usually unreachable from inside the tunnel).
 bool ag::DnsHandler::start_direct_dns_proxy() {
     m_upstream_conn_id_by_direct_client_id.clear();
     m_direct_client.reset();
@@ -794,13 +798,13 @@ bool ag::DnsHandler::start_direct_dns_proxy() {
     std::optional<SocketAddress> socks_listener_address;
     std::vector<std::string> bootstraps;
     if (m_parameters.direct_dns_via_tunnel) {
-        if (m_parameters.dns_proxy_listener_address.is_any()
-                || !m_parameters.dns_proxy_listener_address.is_loopback()) {
-            log_handler(this, err,
-                    "DNS proxy listener address is invalid: {}, direct DNS via tunnel unavailable, "
-                    "excluded queries use the system DNS proxy",
+        if (!has_valid_dns_proxy_listener_address()) {
+            // Not an error: `listen()` may run before the endpoint connects and the SOCKS listener
+            // exists. `start_dns_proxy_listener()` re-applies the parameters once it does; until
+            // then excluded queries use the system DNS proxy (`m_direct_client` stays null).
+            log_handler(this, warn, "DNS proxy listener address is invalid: {}, direct DNS via tunnel waits for it",
                     m_parameters.dns_proxy_listener_address);
-            return false;
+            return true;
         }
         socks_listener_address = m_parameters.dns_proxy_listener_address;
     } else {
